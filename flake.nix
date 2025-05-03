@@ -33,6 +33,7 @@
             libllvm
             libbpf
             linuxHeaders
+            bpftools
           ];
         };
       }
