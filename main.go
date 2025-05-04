@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -87,12 +88,7 @@ func Add(args *skel.CmdArgs) (err error) {
 		Mask: net.CIDRMask(32, 32),
 	}
 	defaultRoute := net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)}
-	// ipConfig := &cniTypesV1.IPConfig{
-	// 	Address: address,
-	// 	Gateway: defaultRoute.IP,
-	// }
 
-	var macAddrStr string
 	if err = ns.Do(func() error {
 		l, err := safenetlink.LinkByName(args.IfName)
 		if err != nil {
@@ -130,24 +126,19 @@ func Add(args *skel.CmdArgs) (err error) {
 			}
 		}
 
-		if l.Attrs() != nil {
-			macAddrStr = l.Attrs().HardwareAddr.String()
-		}
-		fmt.Println("Mac Address:", macAddrStr)
-
 		return err
 	}); err != nil {
 		return fmt.Errorf("unable to configure interfaces in container namespace: %w", err)
 	}
 
-	var objs tcxObjects
-	if err := loadTcxObjects(&objs, nil); err != nil {
-		return fmt.Errorf("loading eBPF objects: %w", err)
+	var containerObjs containerObjects
+	if err := loadContainerObjects(&containerObjs, nil); err != nil {
+		return fmt.Errorf("loading container eBPF objects: %w", err)
 	}
-	defer objs.Close()
+	defer containerObjs.Close()
 
 	linkPrimary, err := link.AttachNetkit(link.NetkitOptions{
-		Program:   objs.NetkitPrimary,
+		Program:   containerObjs.NetkitPrimary,
 		Attach:    ebpf.AttachNetkitPrimary,
 		Interface: netkit.Index,
 		Anchor:    link.Tail(),
@@ -161,7 +152,7 @@ func Add(args *skel.CmdArgs) (err error) {
 	}
 
 	linkPeer, err := link.AttachNetkit(link.NetkitOptions{
-		Program:   objs.NetkitPeer,
+		Program:   containerObjs.NetkitPeer,
 		Attach:    ebpf.AttachNetkitPeer,
 		Interface: netkit.Index,
 		Anchor:    link.Tail(),
@@ -172,6 +163,36 @@ func Add(args *skel.CmdArgs) (err error) {
 	defer linkPeer.Close()
 	if err := linkPeer.Pin("pins/peer-pin"); err != nil {
 		return fmt.Errorf("pinning peer link %w", err)
+	}
+
+	var externalObjs externalObjects
+	if err := loadExternalObjects(&externalObjs, nil); err != nil {
+		return fmt.Errorf("loading external eBPF objects: %w", err)
+	}
+	defer externalObjs.Close()
+
+	linkExternalIngress, err := link.AttachTCX(link.TCXOptions{
+		Interface: 2,
+		Program:   externalObjs.TcxIngress,
+		Attach:    ebpf.AttachTCXIngress,
+	})
+	if err != nil {
+		return fmt.Errorf("attach tcx ingress: %v", err)
+	}
+	defer linkExternalIngress.Close()
+
+	linkExternalEgress, err := link.AttachTCX(link.TCXOptions{
+		Interface: 2,
+		Program:   externalObjs.TcxEgress,
+		Attach:    ebpf.AttachTCXEgress,
+	})
+	if err != nil {
+		return fmt.Errorf("attach tcx egress: %v", err)
+	}
+	defer linkExternalEgress.Close()
+
+	if err = externalObjs.NetkitIfindex.Set(int32(netkit.Index)); err != nil {
+		return fmt.Errorf("setting netkit_ifindex to %d failed", netkit.Index)
 	}
 
 	tick := time.Tick(time.Second)
@@ -237,6 +258,10 @@ func SetupNetkitWithNames(lxcIfName, peerIfName string, mtu, groIPv4MaxSize, gso
 			}
 		}
 	}()
+
+	if err = DisableRpFilter(lxcIfName); err != nil {
+		return nil, nil, fmt.Errorf("disable rpfilter: %w", err)
+	}
 
 	peer, err := safenetlink.LinkByName(peerIfName)
 	if err != nil {
@@ -329,4 +354,23 @@ func SetupNetkitRemoteNs(ns *netns.NetNS, srcIfName, dstIfName string) error {
 		}
 		return nil
 	})
+}
+
+func DisableRpFilter(ifName string) error {
+	// Path to the sysctl setting for rp_filter on the specified interface
+	rpFilterPath := filepath.Join("/proc/sys/net/ipv4/conf", ifName, "rp_filter")
+
+	// Try to open the file for writing
+	file, err := os.OpenFile(rpFilterPath, os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open rp_filter file for interface %s: %w", ifName, err)
+	}
+	defer file.Close()
+
+	// Write "0" to disable rp_filter
+	if _, err := file.WriteString("0"); err != nil {
+		return fmt.Errorf("failed to write to rp_filter file for interface %s: %w", ifName, err)
+	}
+
+	return nil
 }
