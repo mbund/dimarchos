@@ -1,23 +1,14 @@
 //go:build linux
 
-// This program demonstrates attaching an eBPF program to a network interface
-// with Linux TCX (Traffic Control with eBPF). The program counts ingress and egress
-// packets using two variables. The userspace program (Go code in this file)
-// prints the contents of the two variables to stdout every second.
-// This example depends on tcx bpf_link, available in Linux kernel version 6.6 or newer.
 package main
 
 import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"os"
-	"os/signal"
-	"path/filepath"
 	"runtime"
-	"time"
 
 	ciliumPkgLink "github.com/cilium/cilium/pkg/datapath/link"
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
@@ -40,12 +31,12 @@ func init() {
 
 func main() {
 	skel.PluginMainFuncs(skel.CNIFuncs{
-		Add: Add,
+		Add: add,
 	}, cniVersion.PluginSupports("0.1.0", "0.2.0", "0.3.0", "0.3.1", "0.4.0", "1.0.0", "1.1.0"), "Dimarchos CNI plugin")
 }
 
-func Add(args *skel.CmdArgs) (err error) {
-	conf, err := LoadNetConf(args.StdinData)
+func add(args *skel.CmdArgs) (err error) {
+	conf, err := loadNetConf(args.StdinData)
 	if err != nil {
 		return fmt.Errorf("unable to parse CNI configuration %q: %w", string(args.StdinData), err)
 	}
@@ -57,7 +48,7 @@ func Add(args *skel.CmdArgs) (err error) {
 	defer ns.Close()
 
 	cniID := "containerid:ifacename"
-	netkit, peer, tmpIfName, err := SetupNetkit(cniID, 1500, 65536, 65536)
+	netkit, peer, tmpIfName, err := setupNetkit(cniID, 1500, 65536, 65536)
 	if err != nil {
 		return fmt.Errorf("unable to set up netkit on host side: %w", err)
 	}
@@ -78,7 +69,7 @@ func Add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("unable to move netkit pair %q to netns %s: %w", peer, args.Netns, err)
 	}
 
-	err = SetupNetkitRemoteNs(ns, tmpIfName, args.IfName)
+	err = setupNetkitRemoteNs(ns, tmpIfName, args.IfName)
 	if err != nil {
 		return fmt.Errorf("unable to set up netkit on container side: %w", err)
 	}
@@ -147,7 +138,7 @@ func Add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("attaching netkit primary: %v", err)
 	}
 	defer linkPrimary.Close()
-	if err := linkPrimary.Pin("pins/primary-pin"); err != nil {
+	if err := linkPrimary.Pin("pins/netkit-primary"); err != nil {
 		return fmt.Errorf("pinning primary link %w", err)
 	}
 
@@ -161,7 +152,7 @@ func Add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("attaching netkit peer: %v", err)
 	}
 	defer linkPeer.Close()
-	if err := linkPeer.Pin("pins/peer-pin"); err != nil {
+	if err := linkPeer.Pin("pins/netkit-peer"); err != nil {
 		return fmt.Errorf("pinning peer link %w", err)
 	}
 
@@ -180,6 +171,9 @@ func Add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("attach tcx ingress: %v", err)
 	}
 	defer linkExternalIngress.Close()
+	if err := linkExternalIngress.Pin("pins/tcx-ingress"); err != nil {
+		return fmt.Errorf("pinning tcx ingress link %w", err)
+	}
 
 	linkExternalEgress, err := link.AttachTCX(link.TCXOptions{
 		Interface: 2,
@@ -190,28 +184,18 @@ func Add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("attach tcx egress: %v", err)
 	}
 	defer linkExternalEgress.Close()
+	if err := linkExternalEgress.Pin("pins/tcx-egress"); err != nil {
+		return fmt.Errorf("pinning tcx egress link %w", err)
+	}
 
 	if err = externalObjs.NetkitIfindex.Set(int32(netkit.Index)); err != nil {
 		return fmt.Errorf("setting netkit_ifindex to %d failed", netkit.Index)
 	}
 
-	tick := time.Tick(time.Second)
-	stop := make(chan os.Signal, 5)
-	signal.Notify(stop, os.Interrupt)
-	for {
-		select {
-		case <-tick:
-			log.Print("Processing")
-		case <-stop:
-			log.Print("Received signal, exiting..")
-			return
-		}
-	}
-
 	return cniTypes.PrintResult(res, conf.CNIVersion)
 }
 
-func LoadNetConf(bytes []byte) (*cniTypes.NetConf, error) {
+func loadNetConf(bytes []byte) (*cniTypes.NetConf, error) {
 	conf := &cniTypes.NetConf{}
 	if err := json.Unmarshal(bytes, conf); err != nil {
 		return nil, fmt.Errorf("failed to load netconf: %w", err)
@@ -219,19 +203,19 @@ func LoadNetConf(bytes []byte) (*cniTypes.NetConf, error) {
 	return conf, nil
 }
 
-func SetupNetkit(id string, mtu, groIPv4MaxSize, gsoIPv4MaxSize int) (*netlink.Netkit, netlink.Link, string, error) {
+func setupNetkit(id string, mtu, groIPv4MaxSize, gsoIPv4MaxSize int) (*netlink.Netkit, netlink.Link, string, error) {
 	if id == "" {
 		return nil, nil, "", fmt.Errorf("invalid: empty ID")
 	}
 
-	lxcIfName := Endpoint2IfName(id)
-	tmpIfName := Endpoint2TempIfName(id)
+	lxcIfName := endpointToIfName(id)
+	tmpIfName := endpointToTempIfName(id)
 
-	netkit, link, err := SetupNetkitWithNames(lxcIfName, tmpIfName, mtu, groIPv4MaxSize, gsoIPv4MaxSize)
+	netkit, link, err := setupNetkitWithNames(lxcIfName, tmpIfName, mtu, groIPv4MaxSize, gsoIPv4MaxSize)
 	return netkit, link, tmpIfName, err
 }
 
-func SetupNetkitWithNames(lxcIfName, peerIfName string, mtu, groIPv4MaxSize, gsoIPv4MaxSize int) (*netlink.Netkit, netlink.Link, error) {
+func setupNetkitWithNames(lxcIfName, peerIfName string, mtu, groIPv4MaxSize, gsoIPv4MaxSize int) (*netlink.Netkit, netlink.Link, error) {
 	netkit := &netlink.Netkit{
 		LinkAttrs: netlink.LinkAttrs{
 			Name:   lxcIfName,
@@ -258,10 +242,6 @@ func SetupNetkitWithNames(lxcIfName, peerIfName string, mtu, groIPv4MaxSize, gso
 			}
 		}
 	}()
-
-	if err = DisableRpFilter(lxcIfName); err != nil {
-		return nil, nil, fmt.Errorf("disable rpfilter: %w", err)
-	}
 
 	peer, err := safenetlink.LinkByName(peerIfName)
 	if err != nil {
@@ -317,23 +297,17 @@ func SetupNetkitWithNames(lxcIfName, peerIfName string, mtu, groIPv4MaxSize, gso
 }
 
 const (
-	// HostInterfacePrefix is the Host interface prefix.
-	HostInterfacePrefix = "lxc"
-	// temporaryInterfacePrefix is the temporary interface prefix while setting up libNetwork interface.
+	hostInterfacePrefix      = "lxc"
 	temporaryInterfacePrefix = "tmp"
 )
 
-// Endpoint2IfName returns the host interface name for the given endpointID.
-func Endpoint2IfName(endpointID string) string {
+func endpointToIfName(endpointID string) string {
 	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(endpointID)))
-	// returned string length should be < unix.IFNAMSIZ
 	truncateLength := uint(unix.IFNAMSIZ - len(temporaryInterfacePrefix) - 1)
-	return HostInterfacePrefix + truncateString(sum, truncateLength)
+	return hostInterfacePrefix + truncateString(sum, truncateLength)
 }
 
-// Endpoint2TempIfName returns the temporary interface name for the given
-// endpointID.
-func Endpoint2TempIfName(endpointID string) string {
+func endpointToTempIfName(endpointID string) string {
 	return temporaryInterfacePrefix + truncateString(endpointID, 5)
 }
 
@@ -344,9 +318,7 @@ func truncateString(epID string, maxLen uint) string {
 	return epID
 }
 
-// SetupNetkitRemoteNs renames the netdevice in the target namespace to the
-// provided dstIfName.
-func SetupNetkitRemoteNs(ns *netns.NetNS, srcIfName, dstIfName string) error {
+func setupNetkitRemoteNs(ns *netns.NetNS, srcIfName, dstIfName string) error {
 	return ns.Do(func() error {
 		err := ciliumPkgLink.Rename(srcIfName, dstIfName)
 		if err != nil {
@@ -354,23 +326,4 @@ func SetupNetkitRemoteNs(ns *netns.NetNS, srcIfName, dstIfName string) error {
 		}
 		return nil
 	})
-}
-
-func DisableRpFilter(ifName string) error {
-	// Path to the sysctl setting for rp_filter on the specified interface
-	rpFilterPath := filepath.Join("/proc/sys/net/ipv4/conf", ifName, "rp_filter")
-
-	// Try to open the file for writing
-	file, err := os.OpenFile(rpFilterPath, os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open rp_filter file for interface %s: %w", ifName, err)
-	}
-	defer file.Close()
-
-	// Write "0" to disable rp_filter
-	if _, err := file.WriteString("0"); err != nil {
-		return fmt.Errorf("failed to write to rp_filter file for interface %s: %w", ifName, err)
-	}
-
-	return nil
 }
