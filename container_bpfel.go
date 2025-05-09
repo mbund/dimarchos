@@ -12,6 +12,8 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type containerQnameKey struct{ Qname [256]uint8 }
+
 // loadContainer returns the embedded CollectionSpec for container.
 func loadContainer() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_ContainerBytes)
@@ -62,6 +64,7 @@ type containerProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type containerMapSpecs struct {
+	QnameMap *ebpf.MapSpec `ebpf:"qname_map"`
 }
 
 // containerVariableSpecs contains global variables before they are loaded into the kernel.
@@ -92,10 +95,13 @@ func (o *containerObjects) Close() error {
 //
 // It can be passed to loadContainerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type containerMaps struct {
+	QnameMap *ebpf.Map `ebpf:"qname_map"`
 }
 
 func (m *containerMaps) Close() error {
-	return _ContainerClose()
+	return _ContainerClose(
+		m.QnameMap,
+	)
 }
 
 // containerVariables contains all global variables after they have been loaded into the kernel.

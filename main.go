@@ -192,6 +192,9 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("setting netkit_ifindex to %d failed", netkit.Index)
 	}
 
+	containerObjs.containerMaps.QnameMap.Update(append([]byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-12)...), []byte{2, 2, 2, 2}, ebpf.UpdateAny)
+	containerObjs.containerMaps.QnameMap.Update(append([]byte{6, 'g', 'o', 'o', 'g', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-11)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
+
 	return cniTypes.PrintResult(res, conf.CNIVersion)
 }
 
