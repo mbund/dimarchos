@@ -122,6 +122,14 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("unable to configure interfaces in container namespace: %w", err)
 	}
 
+	if err = netlink.RouteAdd(&netlink.Route{
+		LinkIndex: netkit.Index,
+		Dst:       &address,
+		Scope:     netlink.SCOPE_LINK,
+	}); err != nil {
+		return fmt.Errorf("adding route")
+	}
+
 	var containerObjs containerObjects
 	if err := loadContainerObjects(&containerObjs, nil); err != nil {
 		return fmt.Errorf("loading container eBPF objects: %w", err)
@@ -194,6 +202,7 @@ func add(args *skel.CmdArgs) (err error) {
 
 	containerObjs.containerMaps.QnameMap.Update(append([]byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-12)...), []byte{2, 2, 2, 2}, ebpf.UpdateAny)
 	containerObjs.containerMaps.QnameMap.Update(append([]byte{6, 'g', 'o', 'o', 'g', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-11)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
+	containerObjs.containerMaps.QnameMap.Update(append([]byte{6, 't', 'h', 'a', 'n', 'o', 's', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-19)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
 
 	return cniTypes.PrintResult(res, conf.CNIVersion)
 }
