@@ -12,6 +12,21 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type externalNatKey struct {
+	SrcIp   uint32
+	DstIp   uint32
+	SrcPort uint16
+	DstPort uint16
+	Proto   uint8
+	_       [3]byte
+}
+
+type externalNatValue struct {
+	NewSrcIp   uint32
+	NewSrcPort uint16
+	_          [2]byte
+}
+
 // loadExternal returns the embedded CollectionSpec for external.
 func loadExternal() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_ExternalBytes)
@@ -62,6 +77,7 @@ type externalProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type externalMapSpecs struct {
+	NatTable *ebpf.MapSpec `ebpf:"nat_table"`
 }
 
 // externalVariableSpecs contains global variables before they are loaded into the kernel.
@@ -91,10 +107,13 @@ func (o *externalObjects) Close() error {
 //
 // It can be passed to loadExternalObjects or ebpf.CollectionSpec.LoadAndAssign.
 type externalMaps struct {
+	NatTable *ebpf.Map `ebpf:"nat_table"`
 }
 
 func (m *externalMaps) Close() error {
-	return _ExternalClose()
+	return _ExternalClose(
+		m.NatTable,
+	)
 }
 
 // externalVariables contains all global variables after they have been loaded into the kernel.
