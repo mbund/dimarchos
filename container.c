@@ -10,7 +10,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-char __license[] SEC("license") = "Dual MIT/GPL";
+char __license[] SEC("license") = "GPL";
 
 __u64 ingress_pkt_count = 0;
 __u64 egress_pkt_count  = 0;

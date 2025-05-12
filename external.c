@@ -10,7 +10,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
-char __license[] SEC("license") = "Dual MIT/GPL";
+char __license[] SEC("license") = "GPL";
 
 volatile __u32 netkit_ifindex = 0;
 
@@ -18,11 +18,6 @@ volatile __u32 netkit_ifindex = 0;
 
 #define CONTAINER_IP IP4_TO_BE32(173, 18, 0, 5)
 #define HOST_IP IP4_TO_BE32(10, 23, 29, 109)
-
-#define IP_CSUM_OFF (ETH_HLEN + offsetof(struct iphdr, check))
-#define TCP_CSUM_OFF (ETH_HLEN + sizeof(struct iphdr) + offsetof(struct tcphdr, check))
-#define IP_SRC_OFF (ETH_HLEN + offsetof(struct iphdr, saddr))
-#define IP_DST_OFF (ETH_HLEN + offsetof(struct iphdr, daddr))
 
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
