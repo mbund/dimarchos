@@ -200,6 +200,25 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("setting netkit_ifindex to %d failed", netkit.Index)
 	}
 
+	var sockObjs socketsObjects
+	if err := loadSocketsObjects(&sockObjs, nil); err != nil {
+		return fmt.Errorf("loading external eBPF objects: %w", err)
+	}
+	defer sockObjs.Close()
+
+	linkSockOpts, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    "/sys/fs/cgroup/dimarchos",
+		Program: sockObjs.SockopsLogger,
+		Attach:  ebpf.AttachCGroupSockOps,
+	})
+	if err != nil {
+		return fmt.Errorf("attach socket ops: %v", err)
+	}
+	defer linkSockOpts.Close()
+	if err := linkSockOpts.Pin("pins/cgroup-sockopts"); err != nil {
+		return fmt.Errorf("pinning socket ops link %w", err)
+	}
+
 	containerObjs.containerMaps.QnameMap.Update(append([]byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-12)...), []byte{2, 2, 2, 2}, ebpf.UpdateAny)
 	containerObjs.containerMaps.QnameMap.Update(append([]byte{6, 'g', 'o', 'o', 'g', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-11)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
 	containerObjs.containerMaps.QnameMap.Update(append([]byte{6, 't', 'h', 'a', 'n', 'o', 's', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-19)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
