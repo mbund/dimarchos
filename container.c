@@ -18,7 +18,7 @@ __u64 egress_pkt_count  = 0;
 #define IP4_TO_BE32(a, b, c, d) ((__be32)(((d) << 24) + ((c) << 16) + ((b) << 8) + (a)))
 
 #define CONTAINER_IP IP4_TO_BE32(173, 18, 0, 5)
-#define HOST_IP IP4_TO_BE32(10, 23, 29, 109)
+#define HOST_IP IP4_TO_BE32(10, 23, 29, 149)
 
 #define DNS_SERVER_IP IP4_TO_BE32(173, 18, 0, 2)
 #define API_SERVER_IP IP4_TO_BE32(169, 254, 169, 254)
@@ -246,5 +246,5 @@ pass:
         return TCX_PASS;
     }
 
-    return bpf_redirect_neigh(2, NULL, 0, 0);
+    return bpf_redirect_neigh(3, NULL, 0, 0);
 }

@@ -17,7 +17,7 @@ volatile __u32 netkit_ifindex = 0;
 #define IP4_TO_BE32(a, b, c, d) ((__be32)(((d) << 24) + ((c) << 16) + ((b) << 8) + (a)))
 
 #define CONTAINER_IP IP4_TO_BE32(173, 18, 0, 5)
-#define HOST_IP IP4_TO_BE32(10, 23, 29, 109)
+#define HOST_IP IP4_TO_BE32(10, 23, 29, 149)
 
 #define unlikely(x) __builtin_expect(!!(x), 0)
 

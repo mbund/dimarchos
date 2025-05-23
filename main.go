@@ -146,7 +146,7 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("attaching netkit primary: %v", err)
 	}
 	defer linkPrimary.Close()
-	if err := linkPrimary.Pin("pins/netkit-primary"); err != nil {
+	if err := linkPrimary.Pin("/sys/fs/bpf/netkit-primary"); err != nil {
 		return fmt.Errorf("pinning primary link %w", err)
 	}
 
@@ -160,7 +160,7 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("attaching netkit peer: %v", err)
 	}
 	defer linkPeer.Close()
-	if err := linkPeer.Pin("pins/netkit-peer"); err != nil {
+	if err := linkPeer.Pin("/sys/fs/bpf/netkit-peer"); err != nil {
 		return fmt.Errorf("pinning peer link %w", err)
 	}
 
@@ -171,7 +171,7 @@ func add(args *skel.CmdArgs) (err error) {
 	defer externalObjs.Close()
 
 	linkExternalIngress, err := link.AttachTCX(link.TCXOptions{
-		Interface: 2,
+		Interface: 3,
 		Program:   externalObjs.TcxIngress,
 		Attach:    ebpf.AttachTCXIngress,
 	})
@@ -179,12 +179,12 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("attach tcx ingress: %v", err)
 	}
 	defer linkExternalIngress.Close()
-	if err := linkExternalIngress.Pin("pins/tcx-ingress"); err != nil {
+	if err := linkExternalIngress.Pin("/sys/fs/bpf/tcx-ingress"); err != nil {
 		return fmt.Errorf("pinning tcx ingress link %w", err)
 	}
 
 	linkExternalEgress, err := link.AttachTCX(link.TCXOptions{
-		Interface: 2,
+		Interface: 3,
 		Program:   externalObjs.TcxEgress,
 		Attach:    ebpf.AttachTCXEgress,
 	})
@@ -192,7 +192,7 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("attach tcx egress: %v", err)
 	}
 	defer linkExternalEgress.Close()
-	if err := linkExternalEgress.Pin("pins/tcx-egress"); err != nil {
+	if err := linkExternalEgress.Pin("/sys/fs/bpf/tcx-egress"); err != nil {
 		return fmt.Errorf("pinning tcx egress link %w", err)
 	}
 
@@ -215,7 +215,7 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("attach socket ops: %v", err)
 	}
 	defer linkSockOpts.Close()
-	if err := linkSockOpts.Pin("pins/cgroup-sockopts"); err != nil {
+	if err := linkSockOpts.Pin("/sys/fs/bpf/cgroup-sockopts"); err != nil {
 		return fmt.Errorf("pinning socket ops link %w", err)
 	}
 
