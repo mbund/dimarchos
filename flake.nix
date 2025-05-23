@@ -34,6 +34,11 @@
             libbpf
             linuxHeaders
             bpftools
+            containerd
+            nerdctl
+            protobuf
+            protoc-gen-go
+            protoc-gen-go-grpc
           ];
         };
       }

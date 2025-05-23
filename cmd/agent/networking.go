@@ -1,14 +1,10 @@
-//go:build linux
-
 package main
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
-	"runtime"
 
 	ciliumPkgLink "github.com/cilium/cilium/pkg/datapath/link"
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
@@ -16,34 +12,16 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 
-	"github.com/containernetworking/cni/pkg/skel"
-	cniTypes "github.com/containernetworking/cni/pkg/types"
-	cniTypesV1 "github.com/containernetworking/cni/pkg/types/100"
-	cniVersion "github.com/containernetworking/cni/pkg/version"
-
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+
+	"github.com/mbund/dimarchos/cmd/agent/bpf/objs"
 )
 
-func init() {
-	runtime.LockOSThread()
-}
-
-func main() {
-	skel.PluginMainFuncs(skel.CNIFuncs{
-		Add: add,
-	}, cniVersion.PluginSupports("0.1.0", "0.2.0", "0.3.0", "0.3.1", "0.4.0", "1.0.0", "1.1.0"), "Dimarchos CNI plugin")
-}
-
-func add(args *skel.CmdArgs) (err error) {
-	conf, err := loadNetConf(args.StdinData)
+func Add(netnsPath, containerId, ifName string) (err error) {
+	ns, err := netns.OpenPinned(netnsPath)
 	if err != nil {
-		return fmt.Errorf("unable to parse CNI configuration %q: %w", string(args.StdinData), err)
-	}
-
-	ns, err := netns.OpenPinned(args.Netns)
-	if err != nil {
-		return fmt.Errorf("opening netns pinned at %s: %w", args.Netns, err)
+		return fmt.Errorf("opening netns pinned at %s: %w", netnsPath, err)
 	}
 	defer ns.Close()
 
@@ -60,16 +38,16 @@ func add(args *skel.CmdArgs) (err error) {
 		}
 	}()
 
-	res := &cniTypesV1.Result{}
-	res.Interfaces = append(res.Interfaces, &cniTypesV1.Interface{
-		Name: netkit.Attrs().Name,
-	})
+	// res := &cniTypesV1.Result{}
+	// res.Interfaces = append(res.Interfaces, &cniTypesV1.Interface{
+	// 	Name: netkit.Attrs().Name,
+	// })
 
 	if err := netlink.LinkSetNsFd(peer, ns.FD()); err != nil {
-		return fmt.Errorf("unable to move netkit pair %q to netns %s: %w", peer, args.Netns, err)
+		return fmt.Errorf("unable to move netkit pair %q to netns %s: %w", peer, netnsPath, err)
 	}
 
-	err = setupNetkitRemoteNs(ns, tmpIfName, args.IfName)
+	err = setupNetkitRemoteNs(ns, tmpIfName, ifName)
 	if err != nil {
 		return fmt.Errorf("unable to set up netkit on container side: %w", err)
 	}
@@ -81,18 +59,18 @@ func add(args *skel.CmdArgs) (err error) {
 	defaultRoute := net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)}
 
 	if err = ns.Do(func() error {
-		l, err := safenetlink.LinkByName(args.IfName)
+		l, err := safenetlink.LinkByName(ifName)
 		if err != nil {
-			return fmt.Errorf("failed to lookup %q: %w", args.IfName, err)
+			return fmt.Errorf("failed to lookup %q: %w", ifName, err)
 		}
 
 		if err := netlink.LinkSetUp(l); err != nil {
-			return fmt.Errorf("failed to set %q UP: %w", args.IfName, err)
+			return fmt.Errorf("failed to set %q UP: %w", ifName, err)
 		}
 
 		addr := &netlink.Addr{IPNet: &address}
 		if err := netlink.AddrAdd(l, addr); err != nil {
-			return fmt.Errorf("failed to add addr to %q: %w", args.IfName, err)
+			return fmt.Errorf("failed to add addr to %q: %w", ifName, err)
 		}
 
 		if err := netlink.RouteAdd(&netlink.Route{
@@ -130,8 +108,8 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("adding route")
 	}
 
-	var containerObjs containerObjects
-	if err := loadContainerObjects(&containerObjs, nil); err != nil {
+	var containerObjs objs.ContainerObjects
+	if err := objs.LoadContainerObjects(&containerObjs, nil); err != nil {
 		return fmt.Errorf("loading container eBPF objects: %w", err)
 	}
 	defer containerObjs.Close()
@@ -164,8 +142,8 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("pinning peer link %w", err)
 	}
 
-	var externalObjs externalObjects
-	if err := loadExternalObjects(&externalObjs, nil); err != nil {
+	var externalObjs objs.ExternalObjects
+	if err := objs.LoadExternalObjects(&externalObjs, nil); err != nil {
 		return fmt.Errorf("loading external eBPF objects: %w", err)
 	}
 	defer externalObjs.Close()
@@ -200,8 +178,8 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("setting netkit_ifindex to %d failed", netkit.Index)
 	}
 
-	var sockObjs socketsObjects
-	if err := loadSocketsObjects(&sockObjs, nil); err != nil {
+	var sockObjs objs.SocketsObjects
+	if err := objs.LoadSocketsObjects(&sockObjs, nil); err != nil {
 		return fmt.Errorf("loading external eBPF objects: %w", err)
 	}
 	defer sockObjs.Close()
@@ -219,19 +197,12 @@ func add(args *skel.CmdArgs) (err error) {
 		return fmt.Errorf("pinning socket ops link %w", err)
 	}
 
-	containerObjs.containerMaps.QnameMap.Update(append([]byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-12)...), []byte{2, 2, 2, 2}, ebpf.UpdateAny)
-	containerObjs.containerMaps.QnameMap.Update(append([]byte{6, 'g', 'o', 'o', 'g', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-11)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
-	containerObjs.containerMaps.QnameMap.Update(append([]byte{6, 't', 'h', 'a', 'n', 'o', 's', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-19)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
+	containerObjs.ContainerMaps.QnameMap.Update(append([]byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-12)...), []byte{2, 2, 2, 2}, ebpf.UpdateAny)
+	containerObjs.ContainerMaps.QnameMap.Update(append([]byte{6, 'g', 'o', 'o', 'g', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-11)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
+	containerObjs.ContainerMaps.QnameMap.Update(append([]byte{6, 't', 'h', 'a', 'n', 'o', 's', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-19)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
 
-	return cniTypes.PrintResult(res, conf.CNIVersion)
-}
-
-func loadNetConf(bytes []byte) (*cniTypes.NetConf, error) {
-	conf := &cniTypes.NetConf{}
-	if err := json.Unmarshal(bytes, conf); err != nil {
-		return nil, fmt.Errorf("failed to load netconf: %w", err)
-	}
-	return conf, nil
+	// return cniTypes.PrintResult(res, conf.CNIVersion)
+	return nil
 }
 
 func setupNetkit(id string, mtu, groIPv4MaxSize, gsoIPv4MaxSize int) (*netlink.Netkit, netlink.Link, string, error) {

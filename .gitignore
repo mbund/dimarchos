@@ -1,2 +1,2 @@
-dimarchos
-pins/*
+/cmd/agent/agent
+/cmd/cli/cli

@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+option go_package = "github.com/mbund/dimarchos/pkg/agent";
+
+package agent;
+
+service Agent {
+  rpc CreateContainer (CreateContainerRequest) returns (CreateContainerResponse) {}
+  rpc DeleteContainer (DeleteContainerRequest) returns (DeleteContainerResponse) {}
+}
+
+message CreateContainerRequest {
+  string name = 1;
+}
+
+message CreateContainerResponse {
+  string id = 1;
+}
+
+message DeleteContainerRequest {
+  string name = 1;
+}
+
+message DeleteContainerResponse {
+  string id = 1;
+}
