@@ -77,14 +77,14 @@ type ExternalProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type ExternalMapSpecs struct {
-	NatTable *ebpf.MapSpec `ebpf:"nat_table"`
+	IpToContainer *ebpf.MapSpec `ebpf:"ip_to_container"`
+	NatTable      *ebpf.MapSpec `ebpf:"nat_table"`
 }
 
 // ExternalVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type ExternalVariableSpecs struct {
-	NetkitIfindex *ebpf.VariableSpec `ebpf:"netkit_ifindex"`
 }
 
 // ExternalObjects contains all objects after they have been loaded into the kernel.
@@ -107,11 +107,13 @@ func (o *ExternalObjects) Close() error {
 //
 // It can be passed to LoadExternalObjects or ebpf.CollectionSpec.LoadAndAssign.
 type ExternalMaps struct {
-	NatTable *ebpf.Map `ebpf:"nat_table"`
+	IpToContainer *ebpf.Map `ebpf:"ip_to_container"`
+	NatTable      *ebpf.Map `ebpf:"nat_table"`
 }
 
 func (m *ExternalMaps) Close() error {
 	return _ExternalClose(
+		m.IpToContainer,
 		m.NatTable,
 	)
 }
@@ -120,7 +122,6 @@ func (m *ExternalMaps) Close() error {
 //
 // It can be passed to LoadExternalObjects or ebpf.CollectionSpec.LoadAndAssign.
 type ExternalVariables struct {
-	NetkitIfindex *ebpf.Variable `ebpf:"netkit_ifindex"`
 }
 
 // ExternalPrograms contains all programs after they have been loaded into the kernel.

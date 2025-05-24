@@ -17,7 +17,6 @@ __u64 egress_pkt_count  = 0;
 
 #define IP4_TO_BE32(a, b, c, d) ((__be32)(((d) << 24) + ((c) << 16) + ((b) << 8) + (a)))
 
-#define CONTAINER_IP IP4_TO_BE32(173, 18, 0, 5)
 #define HOST_IP IP4_TO_BE32(10, 23, 29, 149)
 
 #define DNS_SERVER_IP IP4_TO_BE32(173, 18, 0, 2)
@@ -68,7 +67,7 @@ int netkit_primary(struct __sk_buff *skb) {
     if ((void *)(tcp + 1) > data_end)
         return TCX_PASS;
 
-    if (ip->saddr == HOST_IP && ip->daddr == CONTAINER_IP) {
+    if (ip->saddr == HOST_IP && (bpf_ntohl(ip->saddr) & 0xF0000000) == 0xF0000000) {
         __be16 sport = __builtin_bswap16(tcp->source);
         __be16 dport = __builtin_bswap16(tcp->dest);
         bpf_printk("netkit/primary: redirect magic ip %pI4:%d -> %pI4:%d", &ip->saddr, sport, &ip->daddr, dport);
@@ -140,6 +139,8 @@ int netkit_peer(struct __sk_buff *skb) {
     struct iphdr *ip = (struct iphdr *)(eth + 1);
     if ((void *)(ip + 1) > data_end)
         return TCX_PASS;
+
+    bpf_printk("netkit/peer: %pI4 -> %pI4, ifindex %d, ingress_ifindex %d", &ip->saddr, &ip->daddr, skb->ifindex, skb->ingress_ifindex);
 
     if (ip->protocol == IPPROTO_UDP && ip->daddr == DNS_SERVER_IP) {
         struct udphdr *udp = (struct udphdr *)(ip + 1);
@@ -246,5 +247,6 @@ pass:
         return TCX_PASS;
     }
 
+    bpf_printk("netkit/peer: bpf_redirect_neigh");
     return bpf_redirect_neigh(3, NULL, 0, 0);
 }

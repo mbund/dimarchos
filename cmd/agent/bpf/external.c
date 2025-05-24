@@ -12,11 +12,8 @@
 
 char __license[] SEC("license") = "GPL";
 
-volatile __u32 netkit_ifindex = 0;
-
 #define IP4_TO_BE32(a, b, c, d) ((__be32)(((d) << 24) + ((c) << 16) + ((b) << 8) + (a)))
 
-#define CONTAINER_IP IP4_TO_BE32(173, 18, 0, 5)
 #define HOST_IP IP4_TO_BE32(10, 23, 29, 149)
 
 #define unlikely(x) __builtin_expect(!!(x), 0)
@@ -40,6 +37,13 @@ struct {
     __type(key, struct nat_key);
     __type(value, struct nat_value);
 } nat_table SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 32);
+    __type(key, __be32);  // ipv4 address
+    __type(value, __u32); // netkit ifindex
+} ip_to_container SEC(".maps");
 
 static __always_inline struct nat_value *source_nat(struct iphdr *ip, __be16 src_port, __be16 dst_port) {
     bpf_printk("tcx/ingress: will nat %pI4:%d -> %pI4:%d %s", &ip->saddr, __builtin_bswap16(src_port), &ip->daddr, __builtin_bswap16(dst_port), ip->protocol == IPPROTO_TCP ? "tcp" : "udp");
@@ -119,6 +123,8 @@ int tcx_ingress(struct __sk_buff *skb) {
         if (!entry)
             return TCX_PASS;
 
+        bpf_printk("tcx/ingress: tcp %pI4 -> %pI4, ifindex %d, ingress_ifindex %d", &ip->saddr, &ip->daddr, skb->ifindex, skb->ingress_ifindex);
+
         bpf_printk("tcx/ingress: nat found %pI4:%d -> %pI4:%d %s, new src %pI4:%d", &key.src_ip, __builtin_bswap16(key.src_port), &key.dst_ip, __builtin_bswap16(key.dst_port), ip->protocol == IPPROTO_TCP ? "tcp" : "udp", &entry->new_src_ip, __builtin_bswap16(entry->new_src_port));
 
         ip->daddr = entry->new_src_ip;
@@ -127,7 +133,13 @@ int tcx_ingress(struct __sk_buff *skb) {
         bpf_l3_csum_replace(skb, sizeof(struct ethhdr) + offsetof(struct iphdr, check), key.dst_ip, entry->new_src_ip, sizeof(__be32));
         bpf_l4_csum_replace(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + offsetof(struct tcphdr, check), key.dst_ip, entry->new_src_ip, sizeof(__be32) | BPF_F_PSEUDO_HDR);
         bpf_l4_csum_replace(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + offsetof(struct tcphdr, check), key.dst_port, entry->new_src_port, sizeof(__be16));
-        return bpf_redirect_peer(netkit_ifindex, 0);
+
+        __u32 *netkit_ifindex = bpf_map_lookup_elem(&ip_to_container, &entry->new_src_ip);
+        if (unlikely(!netkit_ifindex))
+            return TCX_PASS;
+
+        bpf_printk("tcx/ingress: tcp netkit_ifindex %d", *netkit_ifindex);
+        return bpf_redirect_peer(*netkit_ifindex, 0);
     } else if (ip->protocol == IPPROTO_UDP) {
         struct udphdr *udp = (struct udphdr *)(ip + 1);
         if (unlikely((void *)(udp + 1) > data_end))
@@ -145,12 +157,21 @@ int tcx_ingress(struct __sk_buff *skb) {
         if (!entry)
             return TCX_PASS;
 
+        bpf_printk("tcx/ingress: udp %pI4 -> %pI4, ifindex %d, ingress_ifindex %d", &ip->saddr, &ip->daddr, skb->ifindex, skb->ingress_ifindex);
+
         ip->daddr = entry->new_src_ip;
         udp->dest = entry->new_src_port;
         bpf_l3_csum_replace(skb, sizeof(struct ethhdr) + offsetof(struct iphdr, check), key.dst_ip, entry->new_src_ip, sizeof(__be32));
         bpf_l4_csum_replace(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + offsetof(struct udphdr, check), key.dst_ip, entry->new_src_ip, sizeof(__be32) | BPF_F_PSEUDO_HDR);
         bpf_l4_csum_replace(skb, sizeof(struct ethhdr) + sizeof(struct iphdr) + offsetof(struct udphdr, check), key.dst_port, entry->new_src_port, sizeof(__be16));
-        return bpf_redirect_peer(netkit_ifindex, 0);
+
+        __u32 *netkit_ifindex = bpf_map_lookup_elem(&ip_to_container, &entry->new_src_ip);
+        bpf_printk("tcx/ingress: udp entry->new_src_ip=%pI4:%d=%d, found=%p", &entry->new_src_ip, entry->new_src_port, entry->new_src_ip, netkit_ifindex);
+        if (unlikely(!netkit_ifindex))
+            return TCX_PASS;
+
+        bpf_printk("tcx/ingress: udp netkit_ifindex %d", *netkit_ifindex);
+        return bpf_redirect_peer(*netkit_ifindex, 0);
     }
 
     return TCX_PASS;
@@ -175,7 +196,8 @@ int tcx_egress(struct __sk_buff *skb) {
     if (ip->protocol != IPPROTO_TCP && ip->protocol != IPPROTO_UDP)
         return TCX_PASS;
 
-    if (ip->saddr == CONTAINER_IP) {
+    if ((bpf_ntohl(ip->saddr) & 0xF0000000) == 0xF0000000) {
+        bpf_printk("tcx/egress: %pI4 -> %pI4, ifindex %d, ingress_ifindex %d", &ip->saddr, &ip->daddr, skb->ifindex, skb->ingress_ifindex);
         if (ip->protocol == IPPROTO_TCP) {
             struct tcphdr *tcp = (struct tcphdr *)(ip + 1);
             if ((void *)(tcp + 1) > data_end)

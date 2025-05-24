@@ -2,9 +2,12 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"os"
+	"strings"
 
 	ciliumPkgLink "github.com/cilium/cilium/pkg/datapath/link"
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
@@ -14,18 +17,16 @@ import (
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
-
-	"github.com/mbund/dimarchos/cmd/agent/bpf/objs"
 )
 
-func Add(netnsPath, containerId, ifName string) (err error) {
+func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err error) {
 	ns, err := netns.OpenPinned(netnsPath)
 	if err != nil {
 		return fmt.Errorf("opening netns pinned at %s: %w", netnsPath, err)
 	}
 	defer ns.Close()
 
-	cniID := "containerid:ifacename"
+	cniID := containerId + ":" + ifName
 	netkit, peer, tmpIfName, err := setupNetkit(cniID, 1500, 65536, 65536)
 	if err != nil {
 		return fmt.Errorf("unable to set up netkit on host side: %w", err)
@@ -53,7 +54,7 @@ func Add(netnsPath, containerId, ifName string) (err error) {
 	}
 
 	address := net.IPNet{
-		IP:   net.IPv4(173, 18, 0, 5),
+		IP:   ip,
 		Mask: net.CIDRMask(32, 32),
 	}
 	defaultRoute := net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)}
@@ -108,14 +109,8 @@ func Add(netnsPath, containerId, ifName string) (err error) {
 		return fmt.Errorf("adding route")
 	}
 
-	var containerObjs objs.ContainerObjects
-	if err := objs.LoadContainerObjects(&containerObjs, nil); err != nil {
-		return fmt.Errorf("loading container eBPF objects: %w", err)
-	}
-	defer containerObjs.Close()
-
 	linkPrimary, err := link.AttachNetkit(link.NetkitOptions{
-		Program:   containerObjs.NetkitPrimary,
+		Program:   s.containerObjs.NetkitPrimary,
 		Attach:    ebpf.AttachNetkitPrimary,
 		Interface: netkit.Index,
 		Anchor:    link.Tail(),
@@ -123,13 +118,13 @@ func Add(netnsPath, containerId, ifName string) (err error) {
 	if err != nil {
 		return fmt.Errorf("attaching netkit primary: %v", err)
 	}
-	defer linkPrimary.Close()
-	if err := linkPrimary.Pin("/sys/fs/bpf/netkit-primary"); err != nil {
-		return fmt.Errorf("pinning primary link %w", err)
-	}
+	// defer linkPrimary.Close()
+	// if err := linkPrimary.Pin("/sys/fs/bpf/netkit-primary"); err != nil {
+	// 	return fmt.Errorf("pinning primary link %w", err)
+	// }
 
 	linkPeer, err := link.AttachNetkit(link.NetkitOptions{
-		Program:   containerObjs.NetkitPeer,
+		Program:   s.containerObjs.NetkitPeer,
 		Attach:    ebpf.AttachNetkitPeer,
 		Interface: netkit.Index,
 		Anchor:    link.Tail(),
@@ -137,69 +132,34 @@ func Add(netnsPath, containerId, ifName string) (err error) {
 	if err != nil {
 		return fmt.Errorf("attaching netkit peer: %v", err)
 	}
-	defer linkPeer.Close()
-	if err := linkPeer.Pin("/sys/fs/bpf/netkit-peer"); err != nil {
-		return fmt.Errorf("pinning peer link %w", err)
-	}
+	// defer linkPeer.Close()
+	// if err := linkPeer.Pin("/sys/fs/bpf/netkit-peer"); err != nil {
+	// 	return fmt.Errorf("pinning peer link %w", err)
+	// }
 
-	var externalObjs objs.ExternalObjects
-	if err := objs.LoadExternalObjects(&externalObjs, nil); err != nil {
-		return fmt.Errorf("loading external eBPF objects: %w", err)
-	}
-	defer externalObjs.Close()
-
-	linkExternalIngress, err := link.AttachTCX(link.TCXOptions{
-		Interface: 3,
-		Program:   externalObjs.TcxIngress,
-		Attach:    ebpf.AttachTCXIngress,
+	s.containers = append(s.containers, container{
+		id:            containerId,
+		netkitPrimary: linkPrimary,
+		netkitPeer:    linkPeer,
+		netkitIndex:   netkit.Index,
 	})
-	if err != nil {
-		return fmt.Errorf("attach tcx ingress: %v", err)
-	}
-	defer linkExternalIngress.Close()
-	if err := linkExternalIngress.Pin("/sys/fs/bpf/tcx-ingress"); err != nil {
-		return fmt.Errorf("pinning tcx ingress link %w", err)
+
+	if err := s.externalObjs.ExternalMaps.IpToContainer.Update(binary.LittleEndian.Uint32(ip.To4()), uint32(netkit.Index), ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("set ip map %s -> %d", ip.String(), netkit.Index)
 	}
 
-	linkExternalEgress, err := link.AttachTCX(link.TCXOptions{
-		Interface: 3,
-		Program:   externalObjs.TcxEgress,
-		Attach:    ebpf.AttachTCXEgress,
-	})
-	if err != nil {
-		return fmt.Errorf("attach tcx egress: %v", err)
+	var (
+		sb  strings.Builder
+		key uint32
+		val uint32
+	)
+	iter := s.externalObjs.ExternalMaps.IpToContainer.Iterate()
+	for iter.Next(&key, &val) {
+		sourceIP := key
+		packetCount := val
+		sb.WriteString(fmt.Sprintf("\t%d => %d\n", sourceIP, packetCount))
 	}
-	defer linkExternalEgress.Close()
-	if err := linkExternalEgress.Pin("/sys/fs/bpf/tcx-egress"); err != nil {
-		return fmt.Errorf("pinning tcx egress link %w", err)
-	}
-
-	if err = externalObjs.NetkitIfindex.Set(int32(netkit.Index)); err != nil {
-		return fmt.Errorf("setting netkit_ifindex to %d failed", netkit.Index)
-	}
-
-	var sockObjs objs.SocketsObjects
-	if err := objs.LoadSocketsObjects(&sockObjs, nil); err != nil {
-		return fmt.Errorf("loading external eBPF objects: %w", err)
-	}
-	defer sockObjs.Close()
-
-	linkSockOpts, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    "/sys/fs/cgroup/dimarchos",
-		Program: sockObjs.SockopsLogger,
-		Attach:  ebpf.AttachCGroupSockOps,
-	})
-	if err != nil {
-		return fmt.Errorf("attach socket ops: %v", err)
-	}
-	defer linkSockOpts.Close()
-	if err := linkSockOpts.Pin("/sys/fs/bpf/cgroup-sockopts"); err != nil {
-		return fmt.Errorf("pinning socket ops link %w", err)
-	}
-
-	containerObjs.ContainerMaps.QnameMap.Update(append([]byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-12)...), []byte{2, 2, 2, 2}, ebpf.UpdateAny)
-	containerObjs.ContainerMaps.QnameMap.Update(append([]byte{6, 'g', 'o', 'o', 'g', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-11)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
-	containerObjs.ContainerMaps.QnameMap.Update(append([]byte{6, 't', 'h', 'a', 'n', 'o', 's', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-19)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
+	log.Printf("%s", sb.String())
 
 	// return cniTypes.PrintResult(res, conf.CNIVersion)
 	return nil
