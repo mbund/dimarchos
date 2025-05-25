@@ -43,7 +43,8 @@ type server struct {
 	sockObjs        objs.SocketsObjects
 	externalIngress link.Link
 	externalEgress  link.Link
-	sock            link.Link
+	sockOpts        link.Link
+	sockMsg         link.Link
 }
 
 type container struct {
@@ -124,7 +125,17 @@ func newServer() (*server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("attach socket ops: %v", err)
 	}
-	s.sock = linkSockOpts
+	s.sockOpts = linkSockOpts
+
+	skMsgLink, err := link.AttachRawLink(link.RawLinkOptions{
+		Attach:  ebpf.AttachSkMsgVerdict,
+		Target:  s.sockObjs.Sockhash.FD(),
+		Program: s.sockObjs.ProgMsgVerdict,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("attach sk_msg: %v", err)
+	}
+	s.sockMsg = skMsgLink
 
 	return s, nil
 }
@@ -135,7 +146,8 @@ func (s *server) Close() error {
 	defer s.externalIngress.Close()
 	defer s.externalEgress.Close()
 	defer s.sockObjs.Close()
-	defer s.sock.Close()
+	defer s.sockOpts.Close()
+	defer s.sockMsg.Close()
 	for _, container := range s.containers {
 		container.netkitPeer.Close()
 		container.netkitPrimary.Close()

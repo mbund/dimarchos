@@ -12,6 +12,14 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type SocketsSockKey struct {
+	RemoteIp4  uint32
+	LocalIp4   uint32
+	RemotePort uint32
+	LocalPort  uint32
+	Family     uint32
+}
+
 // LoadSockets returns the embedded CollectionSpec for Sockets.
 func LoadSockets() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_SocketsBytes)
@@ -54,13 +62,15 @@ type SocketsSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type SocketsProgramSpecs struct {
-	SockopsLogger *ebpf.ProgramSpec `ebpf:"sockops_logger"`
+	ProgMsgVerdict *ebpf.ProgramSpec `ebpf:"prog_msg_verdict"`
+	SockopsLogger  *ebpf.ProgramSpec `ebpf:"sockops_logger"`
 }
 
 // SocketsMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type SocketsMapSpecs struct {
+	Sockhash *ebpf.MapSpec `ebpf:"sockhash"`
 }
 
 // SocketsVariableSpecs contains global variables before they are loaded into the kernel.
@@ -89,10 +99,13 @@ func (o *SocketsObjects) Close() error {
 //
 // It can be passed to LoadSocketsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type SocketsMaps struct {
+	Sockhash *ebpf.Map `ebpf:"sockhash"`
 }
 
 func (m *SocketsMaps) Close() error {
-	return _SocketsClose()
+	return _SocketsClose(
+		m.Sockhash,
+	)
 }
 
 // SocketsVariables contains all global variables after they have been loaded into the kernel.
@@ -105,11 +118,13 @@ type SocketsVariables struct {
 //
 // It can be passed to LoadSocketsObjects or ebpf.CollectionSpec.LoadAndAssign.
 type SocketsPrograms struct {
-	SockopsLogger *ebpf.Program `ebpf:"sockops_logger"`
+	ProgMsgVerdict *ebpf.Program `ebpf:"prog_msg_verdict"`
+	SockopsLogger  *ebpf.Program `ebpf:"sockops_logger"`
 }
 
 func (p *SocketsPrograms) Close() error {
 	return _SocketsClose(
+		p.ProgMsgVerdict,
 		p.SockopsLogger,
 	)
 }

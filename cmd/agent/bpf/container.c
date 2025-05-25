@@ -147,7 +147,17 @@ int netkit_peer(struct __sk_buff *skb) {
     if ((void *)(ip + 1) > data_end)
         return TCX_PASS;
 
-    bpf_printk("netkit/peer: %pI4 -> %pI4, ifindex %d, ingress_ifindex %d", &ip->saddr, &ip->daddr, skb->ifindex, skb->ingress_ifindex);
+    if (ip->protocol == IPPROTO_UDP) {
+        struct udphdr *udp = (struct udphdr *)(ip + 1);
+        if ((void *)(udp + 1) <= data_end) {
+            bpf_printk("netkit/peer: udp %pI4:%d -> %pI4:%d, ifindex %d, mark %x", &ip->saddr, __builtin_bswap16(udp->source), &ip->daddr, __builtin_bswap16(udp->dest), skb->ifindex, skb->mark);
+        }
+    } else if (ip->protocol == IPPROTO_TCP) {
+        struct tcphdr *tcp = (struct tcphdr *)(ip + 1);
+        if ((void *)(tcp + 1) <= data_end) {
+            bpf_printk("netkit/peer: tcp %pI4:%d -> %pI4:%d, ifindex %d, mark %x", &ip->saddr, __builtin_bswap16(tcp->source), &ip->daddr, __builtin_bswap16(tcp->dest), skb->ifindex, skb->mark);
+        }
+    }
 
     if (ip->protocol == IPPROTO_UDP && ip->daddr == DNS_SERVER_IP) {
         struct udphdr *udp = (struct udphdr *)(ip + 1);
@@ -235,8 +245,6 @@ int netkit_peer(struct __sk_buff *skb) {
     }
 pass:
 
-    bpf_printk("netkit/peer: %pI4 -> %pI4", &ip->saddr, &ip->daddr);
-
     if (ip->daddr == API_SERVER_IP) {
         if (ip->protocol != IPPROTO_TCP)
             return TCX_PASS;
@@ -261,10 +269,10 @@ pass:
         if (!netkit_ifindex)
             return TCX_PASS;
 
-        bpf_printk("netkit/peer: tcp netkit_ifindex %d", *netkit_ifindex);
+        bpf_printk("netkit/peer: tcp netkit_ifindex %d, size=%d, size2=%d", *netkit_ifindex, skb->len, data_end - data);
         return bpf_redirect_neigh(*netkit_ifindex, NULL, 0, 0);
     }
 
-    bpf_printk("netkit/peer: bpf_redirect_neigh");
+    bpf_printk("netkit/peer: bpf_redirect_neigh size=%d", skb->len);
     return bpf_redirect_neigh(3, NULL, 0, 0);
 }
