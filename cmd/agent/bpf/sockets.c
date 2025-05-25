@@ -12,6 +12,8 @@ SEC("sockops")
 int sockops_logger(struct bpf_sock_ops *skops) {
     int op = skops->op;
 
+    bpf_printk("sockops: src=%pI4:%d dst=%pI4:%d op=%d\n", &skops->local_ip4, bpf_ntohs(skops->local_port), &skops->remote_ip4, bpf_ntohs(skops->remote_port), op);
+
     if (op == BPF_SOCK_OPS_TCP_CONNECT_CB) {
         bpf_printk("TCP_CONNECT_CB: src=%pI4:%d dst=%pI4:%d\n", &skops->local_ip4, bpf_ntohs(skops->local_port), &skops->remote_ip4, bpf_ntohs(skops->remote_port));
         bpf_printk("TCP_CONNECT_CB: src=%x:%d dst=%x:%d\n", skops->local_ip4, bpf_ntohs(skops->local_port), skops->remote_ip4, bpf_ntohs(skops->remote_port));

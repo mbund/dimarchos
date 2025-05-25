@@ -64,7 +64,8 @@ type ContainerProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type ContainerMapSpecs struct {
-	QnameMap *ebpf.MapSpec `ebpf:"qname_map"`
+	IpToContainer *ebpf.MapSpec `ebpf:"ip_to_container"`
+	QnameMap      *ebpf.MapSpec `ebpf:"qname_map"`
 }
 
 // ContainerVariableSpecs contains global variables before they are loaded into the kernel.
@@ -95,11 +96,13 @@ func (o *ContainerObjects) Close() error {
 //
 // It can be passed to LoadContainerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type ContainerMaps struct {
-	QnameMap *ebpf.Map `ebpf:"qname_map"`
+	IpToContainer *ebpf.Map `ebpf:"ip_to_container"`
+	QnameMap      *ebpf.Map `ebpf:"qname_map"`
 }
 
 func (m *ContainerMaps) Close() error {
 	return _ContainerClose(
+		m.IpToContainer,
 		m.QnameMap,
 	)
 }

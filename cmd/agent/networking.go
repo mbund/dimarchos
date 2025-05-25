@@ -118,10 +118,6 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 	if err != nil {
 		return fmt.Errorf("attaching netkit primary: %v", err)
 	}
-	// defer linkPrimary.Close()
-	// if err := linkPrimary.Pin("/sys/fs/bpf/netkit-primary"); err != nil {
-	// 	return fmt.Errorf("pinning primary link %w", err)
-	// }
 
 	linkPeer, err := link.AttachNetkit(link.NetkitOptions{
 		Program:   s.containerObjs.NetkitPeer,
@@ -132,10 +128,6 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 	if err != nil {
 		return fmt.Errorf("attaching netkit peer: %v", err)
 	}
-	// defer linkPeer.Close()
-	// if err := linkPeer.Pin("/sys/fs/bpf/netkit-peer"); err != nil {
-	// 	return fmt.Errorf("pinning peer link %w", err)
-	// }
 
 	s.containers = append(s.containers, container{
 		id:            containerId,
@@ -145,6 +137,10 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 	})
 
 	if err := s.externalObjs.ExternalMaps.IpToContainer.Update(binary.LittleEndian.Uint32(ip.To4()), uint32(netkit.Index), ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("set ip map %s -> %d", ip.String(), netkit.Index)
+	}
+
+	if err := s.containerObjs.ContainerMaps.IpToContainer.Update(binary.LittleEndian.Uint32(ip.To4()), uint32(netkit.Index), ebpf.UpdateAny); err != nil {
 		return fmt.Errorf("set ip map %s -> %d", ip.String(), netkit.Index)
 	}
 

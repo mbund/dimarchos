@@ -39,6 +39,13 @@ static inline void set_tcp_ip_dst(struct __sk_buff *skb, __u32 old_ip, __u32 new
     bpf_skb_store_bytes(skb, IP_DST_OFF, &new_ip, sizeof(new_ip), 0);
 }
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 32);
+    __type(key, __be32);  // ipv4 address
+    __type(value, __u32); // netkit ifindex
+} ip_to_container SEC(".maps");
+
 SEC("netkit/primary")
 int netkit_primary(struct __sk_buff *skb) {
     // bpf_printk("netkit/primary %d", ingress_pkt_count);
@@ -245,6 +252,17 @@ pass:
         set_tcp_ip_dst(skb, daddr, HOST_IP);
         bpf_printk("netkit/peer: redirect magic ip %pI4:%d -> %pI4:%d", &ip->saddr, sport, &ip->daddr, dport);
         return TCX_PASS;
+    }
+
+    if ((bpf_ntohl(ip->daddr) & 0xF0000000) == 0xF0000000) {
+        bpf_printk("netkit/peer: peer route");
+
+        __u32 *netkit_ifindex = bpf_map_lookup_elem(&ip_to_container, &ip->daddr);
+        if (!netkit_ifindex)
+            return TCX_PASS;
+
+        bpf_printk("netkit/peer: tcp netkit_ifindex %d", *netkit_ifindex);
+        return bpf_redirect_neigh(*netkit_ifindex, NULL, 0, 0);
     }
 
     bpf_printk("netkit/peer: bpf_redirect_neigh");

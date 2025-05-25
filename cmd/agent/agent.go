@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"google.golang.org/grpc"
 
@@ -79,11 +80,9 @@ func newServer() (*server, error) {
 		},
 	}
 
-	// var containerObjs objs.ContainerObjects
 	if err := objs.LoadContainerObjects(&s.containerObjs, nil); err != nil {
 		return nil, fmt.Errorf("loading container eBPF objects: %w", err)
 	}
-	// defer containerObjs.Close()
 
 	s.containerObjs.ContainerMaps.QnameMap.Update(append([]byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-12)...), []byte{2, 2, 2, 2}, ebpf.UpdateAny)
 	s.containerObjs.ContainerMaps.QnameMap.Update(append([]byte{6, 'g', 'o', 'o', 'g', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-11)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
@@ -92,7 +91,6 @@ func newServer() (*server, error) {
 	if err := objs.LoadExternalObjects(&s.externalObjs, nil); err != nil {
 		return nil, fmt.Errorf("loading external eBPF objects: %w", err)
 	}
-	// defer externalObjs.Close()
 
 	linkExternalIngress, err := link.AttachTCX(link.TCXOptions{
 		Interface: 3,
@@ -103,10 +101,6 @@ func newServer() (*server, error) {
 		return nil, fmt.Errorf("attach tcx ingress: %v", err)
 	}
 	s.externalIngress = linkExternalIngress
-	// defer linkExternalIngress.Close()
-	// if err := linkExternalIngress.Pin("/sys/fs/bpf/tcx-ingress"); err != nil {
-	// 	return nil, fmt.Errorf("pinning tcx ingress link %w", err)
-	// }
 
 	linkExternalEgress, err := link.AttachTCX(link.TCXOptions{
 		Interface: 3,
@@ -117,20 +111,10 @@ func newServer() (*server, error) {
 		return nil, fmt.Errorf("attach tcx egress: %v", err)
 	}
 	s.externalEgress = linkExternalEgress
-	// defer linkExternalEgress.Close()
-	// if err := linkExternalEgress.Pin("/sys/fs/bpf/tcx-egress"); err != nil {
-	// 	return nil, fmt.Errorf("pinning tcx egress link %w", err)
-	// }
 
-	// if err = s.externalObjs.NetkitIfindex.Set(int32(netkit.Index)); err != nil {
-	// 	return nil, fmt.Errorf("setting netkit_ifindex to %d failed", netkit.Index)
-	// }
-
-	// var sockObjs objs.SocketsObjects
 	if err := objs.LoadSocketsObjects(&s.sockObjs, nil); err != nil {
 		return nil, fmt.Errorf("loading external eBPF objects: %w", err)
 	}
-	// defer sockObjs.Close()
 
 	linkSockOpts, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    "/sys/fs/cgroup/dimarchos",
@@ -141,10 +125,6 @@ func newServer() (*server, error) {
 		return nil, fmt.Errorf("attach socket ops: %v", err)
 	}
 	s.sock = linkSockOpts
-	// defer linkSockOpts.Close()
-	// if err := linkSockOpts.Pin("/sys/fs/bpf/cgroup-sockopts"); err != nil {
-	// 	return nil, fmt.Errorf("pinning socket ops link %w", err)
-	// }
 
 	return s, nil
 }
@@ -179,8 +159,8 @@ nameserver 1.1.1.1
 
 	container, err := s.client.NewContainer(
 		s.namespace,
-		"alpine-4",
-		containerd.WithNewSnapshot("alpine-4-snapshot", image),
+		in.GetName(),
+		containerd.WithNewSnapshot(in.GetName()+"-snapshot", image),
 		containerd.WithNewSpec(
 			oci.WithImageConfig(image),
 			withCustomResolvConf(resolvConfContent),
@@ -190,7 +170,7 @@ nameserver 1.1.1.1
 		log.Fatalln(err)
 		return nil, err
 	}
-	log.Printf("Successfully created container with ID %s and snapshot with ID alpine-4-snapshot", container.ID())
+	log.Printf("Successfully created container with ID %s and snapshot with ID %s-snapshot", container.ID(), in.GetName())
 
 	task, err := container.NewTask(s.namespace, cio.NewCreator(cio.WithStdio))
 	if err != nil {
@@ -213,7 +193,6 @@ nameserver 1.1.1.1
 		return nil, err
 	}
 
-	// call start on the task to execute the redis server
 	if err := task.Start(s.namespace); err != nil {
 		log.Fatalln(err)
 		return nil, err
@@ -224,43 +203,48 @@ nameserver 1.1.1.1
 
 func (s *server) DeleteContainer(_ context.Context, in *pb.DeleteContainerRequest) (*pb.DeleteContainerResponse, error) {
 	log.Printf("Received delete: %v", in.GetName())
-	return &pb.DeleteContainerResponse{Id: "id"}, nil
 
-	// container, err := s.client.LoadContainer(s.namespace, s.containerId)
-	// if err != nil {
-	// 	log.Fatalln(err)
-	// 	return nil, err
-	// }
-	// defer container.Delete(s.namespace, containerd.WithSnapshotCleanup)
+	container, err := s.client.LoadContainer(s.namespace, in.GetName())
+	if err != nil {
+		log.Fatalln(err)
+		return nil, err
+	}
+	log.Printf("A")
+	defer container.Delete(s.namespace, containerd.WithSnapshotCleanup)
 
-	// task, err := container.Task(s.namespace, cio.NewAttach(cio.WithStdio))
-	// if err != nil {
-	// 	log.Fatalln(err)
-	// 	return nil, err
-	// }
-	// defer task.Delete(s.namespace)
+	task, err := container.Task(s.namespace, cio.NewAttach(cio.WithStdio))
+	if err != nil {
+		log.Fatalln(err)
+		return nil, err
+	}
+	defer task.Delete(s.namespace)
+	log.Printf("B")
 
-	// if err := task.Kill(s.namespace, syscall.SIGTERM); err != nil {
-	// 	log.Fatalln(err)
-	// 	return nil, err
-	// }
+	if err := task.Kill(s.namespace, syscall.SIGTERM); err != nil {
+		log.Fatalln(err)
+		return nil, err
+	}
 
-	// // make sure we wait before calling start
-	// exitStatusC, err := task.Wait(s.namespace)
-	// if err != nil {
-	// 	log.Fatalln(err)
-	// 	return nil, err
-	// }
+	log.Printf("C")
 
-	// status := <-exitStatusC
-	// code, _, err := status.Result()
-	// if err != nil {
-	// 	log.Fatalln(err)
-	// 	return nil, err
-	// }
-	// fmt.Printf("alpine-4 exited with status: %d\n", code)
+	// make sure we wait before calling start
+	exitStatusC, err := task.Wait(s.namespace)
+	if err != nil {
+		log.Fatalln(err)
+		return nil, err
+	}
 
-	// return &pb.DeleteContainerResponse{Id: s.containerId}, nil
+	log.Printf("D")
+
+	status := <-exitStatusC
+	code, _, err := status.Result()
+	if err != nil {
+		log.Fatalln(err)
+		return nil, err
+	}
+	fmt.Printf("%s exited with status: %d\n", container.ID(), code)
+
+	return &pb.DeleteContainerResponse{Id: in.GetName()}, nil
 }
 
 func main() {
