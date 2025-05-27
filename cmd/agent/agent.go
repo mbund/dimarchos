@@ -7,10 +7,13 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -20,6 +23,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/vishvananda/netlink"
 
 	"github.com/mbund/dimarchos/cmd/agent/bpf/objs"
 	pb "github.com/mbund/dimarchos/pkg/agent"
@@ -63,7 +67,55 @@ func (s *server) nextIp() (net.IP, error) {
 	return ip, nil
 }
 
+func upsertDummyInterface() error {
+	if link, _ := netlink.LinkByName("dimmeta0"); link != nil {
+		return nil
+	}
+
+	if err := netlink.LinkAdd(&netlink.Dummy{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: "dimmeta0",
+		},
+	}); err != nil {
+		return fmt.Errorf("failed to create dummy interface: %w", err)
+	}
+
+	link, err := netlink.LinkByName("dimmeta0")
+	if err != nil {
+		return fmt.Errorf("failed to find dummy interface link: %w", err)
+	}
+
+	if err := netlink.LinkSetUp(link); err != nil {
+		return fmt.Errorf("failed to set dummy interface up: %w", err)
+	}
+
+	ipnet := net.IPNet{
+		IP:   net.ParseIP("169.254.169.254"),
+		Mask: net.CIDRMask(32, 32),
+	}
+
+	if err := netlink.AddrAdd(link, &netlink.Addr{
+		IPNet: &ipnet,
+	}); err != nil {
+		return fmt.Errorf("failed to add address to interface: %w", err)
+	}
+
+	if err := netlink.RouteAdd(&netlink.Route{
+		LinkIndex: link.Attrs().Index,
+		Scope:     netlink.SCOPE_LINK,
+		Dst:       &ipnet,
+	}); err != nil {
+		return fmt.Errorf("failed to add address to interface: %w", err)
+	}
+
+	return nil
+}
+
 func newServer() (*server, error) {
+	if err := upsertDummyInterface(); err != nil {
+		return nil, err
+	}
+
 	client, err := containerd.New("/run/containerd/containerd.sock")
 	if err != nil {
 		return nil, err
@@ -74,7 +126,7 @@ func newServer() (*server, error) {
 	s := &server{
 		client:     client,
 		namespace:  ctx,
-		containers: make([]container, 2),
+		containers: make([]container, 0),
 		ips: []net.IP{
 			net.IPv4(240, 0, 0, 2),
 			net.IPv4(240, 0, 0, 3),
@@ -149,6 +201,7 @@ func (s *server) Close() error {
 	defer s.sockOpts.Close()
 	defer s.sockMsg.Close()
 	for _, container := range s.containers {
+		log.Printf("deleting container %s", container.id)
 		container.netkitPeer.Close()
 		container.netkitPrimary.Close()
 	}
@@ -160,7 +213,6 @@ func (s *server) CreateContainer(_ context.Context, in *pb.CreateContainerReques
 
 	image, err := s.client.Pull(s.namespace, "docker.io/library/alpine:latest", containerd.WithPullUnpack)
 	if err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
 	log.Printf("Successfully pulled %s image\n", image.Name())
@@ -179,14 +231,12 @@ nameserver 1.1.1.1
 		),
 	)
 	if err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
 	log.Printf("Successfully created container with ID %s and snapshot with ID %s-snapshot", container.ID(), in.GetName())
 
 	task, err := container.NewTask(s.namespace, cio.NewCreator(cio.WithStdio))
 	if err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
 
@@ -201,12 +251,10 @@ nameserver 1.1.1.1
 
 	err = s.Add(netnsPath, container.ID(), "eth0", ip)
 	if err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
 
 	if err := task.Start(s.namespace); err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
 
@@ -218,43 +266,43 @@ func (s *server) DeleteContainer(_ context.Context, in *pb.DeleteContainerReques
 
 	container, err := s.client.LoadContainer(s.namespace, in.GetName())
 	if err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
-	log.Printf("A")
 	defer container.Delete(s.namespace, containerd.WithSnapshotCleanup)
 
 	task, err := container.Task(s.namespace, cio.NewAttach(cio.WithStdio))
 	if err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
 	defer task.Delete(s.namespace)
-	log.Printf("B")
 
 	if err := task.Kill(s.namespace, syscall.SIGTERM); err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
 
-	log.Printf("C")
-
-	// make sure we wait before calling start
 	exitStatusC, err := task.Wait(s.namespace)
 	if err != nil {
-		log.Fatalln(err)
 		return nil, err
 	}
 
-	log.Printf("D")
-
-	status := <-exitStatusC
-	code, _, err := status.Result()
-	if err != nil {
-		log.Fatalln(err)
-		return nil, err
+	select {
+	case status := <-exitStatusC:
+		code, _, err := status.Result()
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("%s exited with status: %d\n", container.ID(), code)
+	case <-time.After(10 * time.Second):
+		if err := task.Kill(s.namespace, syscall.SIGKILL); err != nil {
+			return nil, err
+		}
+		status := <-exitStatusC
+		code, _, err := status.Result()
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("%s exited with status: %d\n", container.ID(), code)
 	}
-	fmt.Printf("%s exited with status: %d\n", container.ID(), code)
 
 	return &pb.DeleteContainerResponse{Id: in.GetName()}, nil
 }
@@ -266,12 +314,33 @@ func main() {
 		log.Fatalf("failed to listen: %v", err)
 	}
 	s := grpc.NewServer()
+	reflection.Register(s)
 	server, err := newServer()
 	if err != nil {
 		log.Fatalf("failed to build server: %v", err)
 	}
 	defer server.Close()
 	pb.RegisterAgentServer(s, server)
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		log.Println("cleaning up...")
+
+		if link, _ := netlink.LinkByName("dimmeta0"); link != nil {
+			if err := netlink.LinkDel(link); err != nil {
+				log.Println("failed to delete link dimmeta0: %w", err)
+			}
+		}
+
+		if err := server.Close(); err != nil {
+			log.Println("failed to close server: %w", err)
+		}
+
+		os.Exit(0)
+	}()
+
 	log.Printf("server listening at %v", lis.Addr())
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)

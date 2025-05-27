@@ -15,6 +15,7 @@ char __license[] SEC("license") = "GPL";
 #define IP4_TO_BE32(a, b, c, d) ((__be32)(((d) << 24) + ((c) << 16) + ((b) << 8) + (a)))
 
 #define HOST_IP IP4_TO_BE32(10, 23, 29, 149)
+#define API_SERVER_IP IP4_TO_BE32(169, 254, 169, 254)
 
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
@@ -196,7 +197,7 @@ int tcx_egress(struct __sk_buff *skb) {
     if (ip->protocol != IPPROTO_TCP && ip->protocol != IPPROTO_UDP)
         return TCX_PASS;
 
-    if ((bpf_ntohl(ip->saddr) & 0xF0000000) == 0xF0000000) {
+    if ((bpf_ntohl(ip->saddr) & 0xF0000000) == 0xF0000000 && ip->daddr != API_SERVER_IP) {
         bpf_printk("tcx/egress: %pI4 -> %pI4, ifindex %d, ingress_ifindex %d", &ip->saddr, &ip->daddr, skb->ifindex, skb->ingress_ifindex);
         if (ip->protocol == IPPROTO_TCP) {
             struct tcphdr *tcp = (struct tcphdr *)(ip + 1);

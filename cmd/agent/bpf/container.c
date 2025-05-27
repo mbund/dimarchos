@@ -17,8 +17,6 @@ __u64 egress_pkt_count  = 0;
 
 #define IP4_TO_BE32(a, b, c, d) ((__be32)(((d) << 24) + ((c) << 16) + ((b) << 8) + (a)))
 
-#define HOST_IP IP4_TO_BE32(10, 23, 29, 149)
-
 #define DNS_SERVER_IP IP4_TO_BE32(173, 18, 0, 2)
 #define API_SERVER_IP IP4_TO_BE32(169, 254, 169, 254)
 
@@ -66,23 +64,6 @@ int netkit_primary(struct __sk_buff *skb) {
         return TCX_PASS;
 
     bpf_printk("netkit/primary: %pI4 -> %pI4", &ip->saddr, &ip->daddr);
-
-    if (ip->protocol != IPPROTO_TCP)
-        return TCX_PASS;
-
-    struct tcphdr *tcp = (struct tcphdr *)(ip + 1);
-    if ((void *)(tcp + 1) > data_end)
-        return TCX_PASS;
-
-    if (ip->saddr == HOST_IP && (bpf_ntohl(ip->saddr) & 0xF0000000) == 0xF0000000) {
-        __be16 sport = __builtin_bswap16(tcp->source);
-        __be16 dport = __builtin_bswap16(tcp->dest);
-        bpf_printk("netkit/primary: redirect magic ip %pI4:%d -> %pI4:%d", &ip->saddr, sport, &ip->daddr, dport);
-        __be32 saddr = ip->saddr;
-        __be32 daddr = ip->daddr;
-        set_tcp_ip_src(skb, saddr, API_SERVER_IP);
-        bpf_printk("netkit/primary: redirect magic ip %pI4:%d -> %pI4:%d", &ip->saddr, sport, &ip->daddr, dport);
-    }
 
     return TCX_PASS;
 }
@@ -246,19 +227,6 @@ int netkit_peer(struct __sk_buff *skb) {
 pass:
 
     if (ip->daddr == API_SERVER_IP) {
-        if (ip->protocol != IPPROTO_TCP)
-            return TCX_PASS;
-
-        struct tcphdr *tcp = (struct tcphdr *)(ip + 1);
-        if ((void *)(tcp + 1) > data_end)
-            return TCX_PASS;
-
-        __be16 sport = __builtin_bswap16(tcp->source);
-        __be16 dport = __builtin_bswap16(tcp->dest);
-        bpf_printk("netkit/peer: redirect magic ip %pI4:%d -> %pI4:%d", &ip->saddr, sport, &ip->daddr, dport);
-        __be32 daddr = ip->daddr;
-        set_tcp_ip_dst(skb, daddr, HOST_IP);
-        bpf_printk("netkit/peer: redirect magic ip %pI4:%d -> %pI4:%d", &ip->saddr, sport, &ip->daddr, dport);
         return TCX_PASS;
     }
 
