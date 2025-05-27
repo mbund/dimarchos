@@ -13,7 +13,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -208,8 +211,15 @@ func (s *server) Close() error {
 	return s.client.Close()
 }
 
-func (s *server) CreateContainer(_ context.Context, in *pb.CreateContainerRequest) (*pb.CreateContainerResponse, error) {
+func (s *server) CreateContainer(ctx context.Context, in *pb.CreateContainerRequest) (*pb.CreateContainerResponse, error) {
 	log.Printf("Received create: %v", in.GetName())
+
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Internal, "unable to get peer from context")
+	}
+
+	log.Printf("peer: %s", p.Addr.String())
 
 	image, err := s.client.Pull(s.namespace, "docker.io/library/alpine:latest", containerd.WithPullUnpack)
 	if err != nil {

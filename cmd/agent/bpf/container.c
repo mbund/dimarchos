@@ -227,6 +227,18 @@ int netkit_peer(struct __sk_buff *skb) {
 pass:
 
     if (ip->daddr == API_SERVER_IP) {
+        // verify the source ip address, because the api server uses it as implicit authentication
+        __u32 *netkit_ifindex = bpf_map_lookup_elem(&ip_to_container, &ip->saddr);
+        if (!netkit_ifindex) {
+            bpf_printk("netkit/peer: cannot find source ifindex");
+            return TCX_DROP;
+        }
+
+        if (*netkit_ifindex != skb->ifindex) {
+            bpf_printk("netkit/peer: *netkit_ifindex != skb->ifindex, %d != %d", *netkit_ifindex, skb->ifindex);
+            return TCX_DROP;
+        }
+
         return TCX_PASS;
     }
 
