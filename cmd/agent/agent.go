@@ -149,7 +149,7 @@ func newServer() (*server, error) {
 	}
 
 	linkExternalIngress, err := link.AttachTCX(link.TCXOptions{
-		Interface: 3,
+		Interface: 2,
 		Program:   s.externalObjs.TcxIngress,
 		Attach:    ebpf.AttachTCXIngress,
 	})
@@ -159,7 +159,7 @@ func newServer() (*server, error) {
 	s.externalIngress = linkExternalIngress
 
 	linkExternalEgress, err := link.AttachTCX(link.TCXOptions{
-		Interface: 3,
+		Interface: 2,
 		Program:   s.externalObjs.TcxEgress,
 		Attach:    ebpf.AttachTCXEgress,
 	})
@@ -319,6 +319,9 @@ func (s *server) DeleteContainer(_ context.Context, in *pb.DeleteContainerReques
 
 func main() {
 	flag.Parse()
+
+	createVM()
+
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)

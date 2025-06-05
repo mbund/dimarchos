@@ -254,5 +254,5 @@ pass:
     }
 
     bpf_printk("netkit/peer: bpf_redirect_neigh size=%d", skb->len);
-    return bpf_redirect_neigh(3, NULL, 0, 0);
+    return bpf_redirect_neigh(2, NULL, 0, 0);
 }

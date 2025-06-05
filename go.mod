@@ -97,13 +97,14 @@ require (
 	go.uber.org/dig v1.17.1 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
+	golang.org/x/crypto v0.38.0 // indirect
 	golang.org/x/exp v0.0.0-20241108190413-2d47ceb2692f // indirect
-	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/net v0.40.0 // indirect
 	golang.org/x/sync v0.14.0 // indirect
-	golang.org/x/term v0.30.0 // indirect
-	golang.org/x/text v0.23.0 // indirect
+	golang.org/x/term v0.32.0 // indirect
+	golang.org/x/text v0.25.0 // indirect
 	golang.org/x/time v0.8.0 // indirect
-	golang.org/x/tools v0.28.0 // indirect
+	golang.org/x/tools v0.33.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250407143221-ac9807e6c755 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
@@ -118,8 +119,10 @@ require (
 	github.com/cilium/ebpf v0.18.0
 	github.com/containerd/containerd/v2 v2.1.1
 	github.com/containernetworking/cni v1.3.0
+	github.com/digitalocean/go-libvirt v0.0.0-20250512231903-57024326652b
 	github.com/spf13/afero v1.14.0 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	golang.org/x/sys v0.33.0
 	google.golang.org/grpc v1.72.1
+	libvirt.org/go/libvirtxml v1.11002.0
 )
