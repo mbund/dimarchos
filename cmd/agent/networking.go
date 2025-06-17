@@ -53,6 +53,13 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 		return fmt.Errorf("unable to set up netkit on container side: %w", err)
 	}
 
+	// networkAddress := ip.Mask(net.CIDRMask(24, 32)).To4()
+	// networkAddressUnit := binary.BigEndian.Uint32(networkAddress)
+
+	// routerAddress := net.IP{0, 0, 0, 0}
+	// binary.BigEndian.PutUint32(routerAddress, networkAddressUnit+1)
+	// log.Printf("router address: %v", routerAddress.String())
+
 	address := net.IPNet{
 		IP:   ip,
 		Mask: net.CIDRMask(32, 32),
@@ -80,7 +87,7 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 			Dst:       &address,
 		}); err != nil {
 			if !os.IsExist(err) {
-				return fmt.Errorf("failed to add route: %w", err)
+				return fmt.Errorf("failed to add route 1: %w", err)
 			}
 		}
 
@@ -92,7 +99,7 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 			Gw:        address.IP,
 		}); err != nil {
 			if !os.IsExist(err) {
-				return fmt.Errorf("failed to add route: %w", err)
+				return fmt.Errorf("failed to add route 2: %w", err)
 			}
 		}
 

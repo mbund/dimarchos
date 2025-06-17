@@ -175,6 +175,8 @@ int netkit_peer(struct __sk_buff *skb) {
 
         bpf_printk("netkit/peer: %s", question);
 
+        // https://blog.apnic.net/2020/09/02/journeying-into-xdp-part-0
+
         // response
         __u32 question_len = 0;
         while (question + question_len < (__u8 *)data_end && question[question_len] != 0 && question_len < 256)
@@ -242,7 +244,7 @@ pass:
         return TCX_PASS;
     }
 
-    if ((bpf_ntohl(ip->daddr) & 0xF0000000) == 0xF0000000) {
+    if ((bpf_ntohl(ip->daddr) & 0xFFFFFF00) == 0x0A000200) {
         bpf_printk("netkit/peer: peer route");
 
         __u32 *netkit_ifindex = bpf_map_lookup_elem(&ip_to_container, &ip->daddr);

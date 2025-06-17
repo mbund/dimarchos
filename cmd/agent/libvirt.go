@@ -1,49 +1,54 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/xml"
-	"fmt"
 	"log"
-	"net/url"
+	"net"
 	"syscall"
 	"unsafe"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/digitalocean/go-libvirt"
+	"github.com/google/uuid"
 	"github.com/mbund/dimarchos/cmd/agent/bpf/objs"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 	"libvirt.org/go/libvirtxml"
 )
 
-func createVM() {
-	uri, _ := url.Parse(string(libvirt.QEMUSystem))
-	virConn, err := libvirt.ConnectToURI(uri)
+func (s *server) createVM(tapObjects *objs.TapObjects, virConn *libvirt.Libvirt, name, ifName, hostMac, guestMac, disk string) {
+	mac, err := net.ParseMAC(hostMac)
 	if err != nil {
-		log.Fatalf("failed to connect: %v", err)
-	}
-
-	caps, err := getHostCapabilities(virConn)
-	if err != nil {
-		log.Fatalf("failed to get host caps")
+		log.Fatalf("failed to parse host mac")
 	}
 
 	tuntap := &netlink.Tuntap{
 		Mode:   netlink.TUNTAP_MODE_TAP,
 		Flags:  unix.IFF_MULTI_QUEUE | unix.IFF_TAP | unix.IFF_NO_PI | unix.IFF_VNET_HDR,
-		Queues: 8,
+		Queues: 2,
 		LinkAttrs: netlink.LinkAttrs{
-			Name: "vmtap0",
+			Name: ifName,
 		},
 	}
 
 	err = netlink.LinkAdd(tuntap)
 	if err != nil {
-		log.Fatalf("failed to add vmtap0")
+		log.Fatalf("failed to add %s", ifName)
 	}
 
-	log.Printf("vmtap0 index: %d, fds: %d", tuntap.Index, len(tuntap.Fds))
+	err = netlink.LinkSetHardwareAddr(tuntap, mac)
+	if err != nil {
+		log.Fatalf("failed to set %s mac address", ifName)
+	}
+
+	err = netlink.LinkSetUp(tuntap)
+	if err != nil {
+		log.Fatalf("failed to set %s up", ifName)
+	}
+
+	log.Printf("%s index: %d, fds: %d", ifName, tuntap.Index, len(tuntap.Fds))
 
 	for _, fd := range tuntap.Fds {
 		var vnetLen int = 12
@@ -59,12 +64,7 @@ func createVM() {
 		}
 	}
 
-	var tapObjects objs.TapObjects
-	if err := objs.LoadTapObjects(&tapObjects, nil); err != nil {
-		log.Fatalf("failed to load tap objects: %v", err)
-	}
-
-	_, err = link.AttachTCX(link.TCXOptions{
+	tcxIngressLink, err := link.AttachTCX(link.TCXOptions{
 		Interface: tuntap.Index,
 		Program:   tapObjects.TcxIngress,
 		Attach:    ebpf.AttachTCXIngress,
@@ -73,7 +73,7 @@ func createVM() {
 		log.Fatalf("failed to attach tap tcx ingress: %v", err)
 	}
 
-	_, err = link.AttachTCX(link.TCXOptions{
+	tcxEgressLink, err := link.AttachTCX(link.TCXOptions{
 		Interface: tuntap.Index,
 		Program:   tapObjects.TcxEgress,
 		Attach:    ebpf.AttachTCXEgress,
@@ -82,7 +82,8 @@ func createVM() {
 		log.Fatalf("failed to attach tap tcx egress: %v", err)
 	}
 
-	_, err = link.AttachXDP(link.XDPOptions{
+	log.Printf("attaching xdp program to tuntap index %d", tuntap.Index)
+	xdpLink, err := link.AttachXDP(link.XDPOptions{
 		Interface: tuntap.Index,
 		Program:   tapObjects.XdpProg,
 	})
@@ -90,10 +91,34 @@ func createVM() {
 		log.Fatalf("failed to attach tap xdp: %v", err)
 	}
 
+	s.vms = append(s.vms, vm{
+		xdpLink:        xdpLink,
+		tcxIngressLink: tcxIngressLink,
+		tcxEgressLink:  tcxEgressLink,
+	})
+
+	guestMacHwAddr, err := net.ParseMAC(guestMac)
+	if err != nil {
+		log.Fatalf("failed to parse host mac")
+	}
+
+	ip, err := s.nextIp()
+	if err != nil {
+		log.Fatalf("failed to get next ip: %v", err)
+	}
+	tapObjects.RoutingTable.Update(
+		binary.LittleEndian.Uint32(ip.To4()),
+		objs.TapRoutingValue{Mac: [6]byte(guestMacHwAddr), Ifindex: uint32(tuntap.Index)},
+		ebpf.UpdateAny,
+	)
+	log.Printf("Assigned %v %v %v %v", ifName, ip.String(), guestMac, tuntap.Index)
+
+	domainUuid := uuid.New()
+
 	domainSpec := libvirtxml.Domain{
 		Type: "kvm",
-		Name: "example",
-		UUID: "d2383778-cff5-429b-b9b6-71dce74d863e",
+		Name: name,
+		UUID: domainUuid.String(),
 		Memory: &libvirtxml.DomainMemory{
 			Value: 4194304,
 			Unit:  "KiB",
@@ -162,7 +187,7 @@ func createVM() {
 					},
 					Source: &libvirtxml.DomainDiskSource{
 						File: &libvirtxml.DomainDiskSourceFile{
-							File: "/var/lib/libvirt/images/ubuntu24.04.qcow2",
+							File: disk,
 						},
 					},
 					Target: &libvirtxml.DomainDiskTarget{
@@ -230,14 +255,18 @@ func createVM() {
 						Ethernet: &libvirtxml.DomainInterfaceSourceEthernet{},
 					},
 					Target: &libvirtxml.DomainInterfaceTarget{
-						Dev:     "vmtap0",
+						Dev:     ifName,
 						Managed: "no",
 					},
 					Model: &libvirtxml.DomainInterfaceModel{
 						Type: "virtio",
 					},
 					Driver: &libvirtxml.DomainInterfaceDriver{
-						Queues: 8,
+						Queues: uint(tuntap.Queues),
+						Name:   "vhost",
+					},
+					MAC: &libvirtxml.DomainInterfaceMAC{
+						Address: guestMac,
 					},
 				},
 			},
@@ -346,8 +375,6 @@ func createVM() {
 	if err != nil {
 		log.Fatalf("failed to create domain: %v", err)
 	}
-
-	fmt.Printf("cores: %d\n", caps.Host.CPU.Topology.Cores)
 }
 
 func getHostCapabilities(virConn *libvirt.Libvirt) (libvirtxml.Caps, error) {

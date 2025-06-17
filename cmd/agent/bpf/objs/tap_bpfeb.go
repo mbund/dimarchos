@@ -12,6 +12,12 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type TapRoutingValue struct {
+	Mac     [6]uint8
+	_       [2]byte
+	Ifindex uint32
+}
+
 // LoadTap returns the embedded CollectionSpec for Tap.
 func LoadTap() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_TapBytes)
@@ -63,12 +69,14 @@ type TapProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type TapMapSpecs struct {
+	RoutingTable *ebpf.MapSpec `ebpf:"routing_table"`
 }
 
 // TapVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type TapVariableSpecs struct {
+	DefaultMac *ebpf.VariableSpec `ebpf:"default_mac"`
 }
 
 // TapObjects contains all objects after they have been loaded into the kernel.
@@ -91,16 +99,20 @@ func (o *TapObjects) Close() error {
 //
 // It can be passed to LoadTapObjects or ebpf.CollectionSpec.LoadAndAssign.
 type TapMaps struct {
+	RoutingTable *ebpf.Map `ebpf:"routing_table"`
 }
 
 func (m *TapMaps) Close() error {
-	return _TapClose()
+	return _TapClose(
+		m.RoutingTable,
+	)
 }
 
 // TapVariables contains all global variables after they have been loaded into the kernel.
 //
 // It can be passed to LoadTapObjects or ebpf.CollectionSpec.LoadAndAssign.
 type TapVariables struct {
+	DefaultMac *ebpf.Variable `ebpf:"default_mac"`
 }
 
 // TapPrograms contains all programs after they have been loaded into the kernel.

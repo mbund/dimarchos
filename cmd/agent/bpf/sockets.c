@@ -43,7 +43,7 @@ int sockops_logger(struct bpf_sock_ops *skops) {
         bpf_printk("sockops: tcp_connect_cb: src=%pI4:%d dst=%pI4:%d", &key.local_ip4, key.local_port, &key.remote_ip4, key.remote_port);
     }
 
-    if ((bpf_ntohl(key.local_ip4) & 0xF0000000) != 0xF0000000 || (bpf_ntohl(key.remote_ip4) & 0xF0000000) != 0xF0000000)
+    if ((bpf_ntohl(key.local_ip4) & 0xFFFFFF00) != 0x0A000200 || (bpf_ntohl(key.remote_ip4) & 0xFFFFFF00) != 0x0A000200)
         return BPF_OK;
 
     switch (op) {
