@@ -12,6 +12,10 @@
 
 char __license[] SEC("license") = "GPL";
 
+#define VM_0_IP IP4_TO_BE32(10, 0, 2, 6)
+
+__u32 vm_ifindex = 0;
+
 __u64 ingress_pkt_count = 0;
 __u64 egress_pkt_count  = 0;
 
@@ -242,6 +246,11 @@ pass:
         }
 
         return TCX_PASS;
+    }
+
+    if (ip->daddr == VM_0_IP) {
+        bpf_printk("netkit/peer: redirect to vm ifindex %d", vm_ifindex);
+        return bpf_redirect_neigh(vm_ifindex, NULL, 0, 0);
     }
 
     if ((bpf_ntohl(ip->daddr) & 0xFFFFFF00) == 0x0A000200) {

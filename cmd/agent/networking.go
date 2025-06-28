@@ -151,6 +151,10 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 		return fmt.Errorf("set ip map %s -> %d", ip.String(), netkit.Index)
 	}
 
+	if err := s.tapObjects.ContainerIfindex.Set(uint32(netkit.Index)); err != nil {
+		return fmt.Errorf("set tap container ifindex %d", netkit.Index)
+	}
+
 	var (
 		sb  strings.Builder
 		key uint32

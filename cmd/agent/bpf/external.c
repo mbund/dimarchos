@@ -14,7 +14,7 @@ char __license[] SEC("license") = "GPL";
 
 #define IP4_TO_BE32(a, b, c, d) ((__be32)(((d) << 24) + ((c) << 16) + ((b) << 8) + (a)))
 
-#define HOST_IP IP4_TO_BE32(172, 20, 7, 150)
+#define HOST_IP IP4_TO_BE32(10, 19, 27, 26)
 #define API_SERVER_IP IP4_TO_BE32(169, 254, 169, 254)
 
 #define unlikely(x) __builtin_expect(!!(x), 0)

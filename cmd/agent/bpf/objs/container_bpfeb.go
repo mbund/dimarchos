@@ -74,6 +74,7 @@ type ContainerMapSpecs struct {
 type ContainerVariableSpecs struct {
 	EgressPktCount  *ebpf.VariableSpec `ebpf:"egress_pkt_count"`
 	IngressPktCount *ebpf.VariableSpec `ebpf:"ingress_pkt_count"`
+	VmIfindex       *ebpf.VariableSpec `ebpf:"vm_ifindex"`
 }
 
 // ContainerObjects contains all objects after they have been loaded into the kernel.
@@ -113,6 +114,7 @@ func (m *ContainerMaps) Close() error {
 type ContainerVariables struct {
 	EgressPktCount  *ebpf.Variable `ebpf:"egress_pkt_count"`
 	IngressPktCount *ebpf.Variable `ebpf:"ingress_pkt_count"`
+	VmIfindex       *ebpf.Variable `ebpf:"vm_ifindex"`
 }
 
 // ContainerPrograms contains all programs after they have been loaded into the kernel.

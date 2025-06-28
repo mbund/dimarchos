@@ -50,6 +50,11 @@ func (s *server) createVM(tapObjects *objs.TapObjects, virConn *libvirt.Libvirt,
 
 	log.Printf("%s index: %d, fds: %d", ifName, tuntap.Index, len(tuntap.Fds))
 
+	err = s.containerObjs.VmIfindex.Set(uint32(tuntap.Index))
+	if err != nil {
+		log.Fatalf("failed to set vm ifindex in ebpf to %d", tuntap.Index)
+	}
+
 	for _, fd := range tuntap.Fds {
 		var vnetLen int = 12
 		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd.Fd(), syscall.TUNSETVNETHDRSZ, uintptr(unsafe.Pointer(&vnetLen)))

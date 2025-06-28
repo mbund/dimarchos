@@ -51,6 +51,7 @@ type server struct {
 	containerObjs   objs.ContainerObjects
 	externalObjs    objs.ExternalObjects
 	sockObjs        objs.SocketsObjects
+	tapObjects      objs.TapObjects
 	externalIngress link.Link
 	externalEgress  link.Link
 	sockOpts        link.Link
@@ -240,7 +241,7 @@ func (s *server) CreateContainer(ctx context.Context, in *pb.CreateContainerRequ
 	log.Printf("Successfully pulled %s image\n", image.Name())
 
 	resolvConfContent := `# Dimarchos DNS Configuration
-nameserver 172.20.0.1
+nameserver 1.1.1.1
 `
 
 	container, err := s.client.NewContainer(
@@ -344,17 +345,6 @@ func main() {
 	}
 	fmt.Printf("cores: %d\n", caps.Host.CPU.Topology.Cores)
 
-	var tapObjects objs.TapObjects
-	if err := objs.LoadTapObjects(&tapObjects, nil); err != nil {
-		log.Fatalf("failed to load tap objects: %v", err)
-	}
-
-	tapObjects.DefaultMac.Set([6]byte{0xa2, 0x14, 0x11, 0xe6, 0x0b, 0x95})
-
-	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
-	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
-	}
 	s := grpc.NewServer()
 	reflection.Register(s)
 	server, err := newServer()
@@ -364,8 +354,19 @@ func main() {
 	defer server.Close()
 	pb.RegisterAgentServer(s, server)
 
-	server.createVM(&tapObjects, virConn, "example0", "vmtap0", "52:54:00:4b:95:7a", "52:54:00:4b:95:7b", "/var/lib/libvirt/images/ubuntu24.04.qcow2")
-	server.createVM(&tapObjects, virConn, "example1", "vmtap1", "52:54:00:4b:95:7e", "52:54:00:4b:95:7f", "/var/lib/libvirt/images/ubuntu24.04-2.qcow2")
+	if err := objs.LoadTapObjects(&server.tapObjects, nil); err != nil {
+		log.Fatalf("failed to load tap objects: %v", err)
+	}
+
+	server.tapObjects.DefaultMac.Set([6]byte{0xa2, 0x14, 0x11, 0xe6, 0x0b, 0x95})
+
+	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
+
+	server.createVM(&server.tapObjects, virConn, "example0", "vmtap0", "52:54:00:4b:95:7a", "52:54:00:4b:95:7b", "/var/lib/libvirt/images/ubuntu24.04.qcow2")
+	server.createVM(&server.tapObjects, virConn, "example1", "vmtap1", "52:54:00:4b:95:7e", "52:54:00:4b:95:7f", "/var/lib/libvirt/images/ubuntu24.04-2.qcow2")
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)

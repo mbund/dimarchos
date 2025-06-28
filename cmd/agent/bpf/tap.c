@@ -11,6 +11,11 @@
 
 char __license[] SEC("license") = "GPL";
 
+__u32 container_ifindex = 0;
+
+#define CONTAINER_0_IP IP4_TO_BE32(10, 0, 2, 5)
+#define IP4_TO_BE32(a, b, c, d) ((__be32)(((d) << 24) + ((c) << 16) + ((b) << 8) + (a)))
+
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
 struct arphdr {
@@ -77,6 +82,11 @@ int tcx_ingress(struct __sk_buff *skb) {
         struct iphdr *ip = (struct iphdr *)(eth + 1);
         if ((void *)(ip + 1) > data_end)
             return TCX_PASS;
+
+        if (ip->daddr == CONTAINER_0_IP) {
+            bpf_printk("tcx/ingress tap %d: ip: %pI4 -> %pI4: redirect to container ifindex %d", skb->ingress_ifindex, &ip->saddr, &ip->daddr, container_ifindex);
+            return bpf_redirect_peer(container_ifindex, 0);
+        }
 
         // bpf_printk("tcx/ingress tap: ip: %pI4 -> %pI4, ifindex %d, ingress_ifindex %d", &ip->saddr, &ip->daddr, skb->ifindex, skb->ingress_ifindex);
 

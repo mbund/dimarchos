@@ -76,7 +76,8 @@ type TapMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type TapVariableSpecs struct {
-	DefaultMac *ebpf.VariableSpec `ebpf:"default_mac"`
+	ContainerIfindex *ebpf.VariableSpec `ebpf:"container_ifindex"`
+	DefaultMac       *ebpf.VariableSpec `ebpf:"default_mac"`
 }
 
 // TapObjects contains all objects after they have been loaded into the kernel.
@@ -112,7 +113,8 @@ func (m *TapMaps) Close() error {
 //
 // It can be passed to LoadTapObjects or ebpf.CollectionSpec.LoadAndAssign.
 type TapVariables struct {
-	DefaultMac *ebpf.Variable `ebpf:"default_mac"`
+	ContainerIfindex *ebpf.Variable `ebpf:"container_ifindex"`
+	DefaultMac       *ebpf.Variable `ebpf:"default_mac"`
 }
 
 // TapPrograms contains all programs after they have been loaded into the kernel.
