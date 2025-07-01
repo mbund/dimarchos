@@ -1,19 +1,20 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"strings"
 
 	ciliumPkgLink "github.com/cilium/cilium/pkg/datapath/link"
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
 	"github.com/cilium/cilium/pkg/netns"
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"github.com/mbund/dimarchos/cmd/agent/bpf/objs"
 
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
@@ -52,13 +53,6 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 	if err != nil {
 		return fmt.Errorf("unable to set up netkit on container side: %w", err)
 	}
-
-	// networkAddress := ip.Mask(net.CIDRMask(24, 32)).To4()
-	// networkAddressUnit := binary.BigEndian.Uint32(networkAddress)
-
-	// routerAddress := net.IP{0, 0, 0, 0}
-	// binary.BigEndian.PutUint32(routerAddress, networkAddressUnit+1)
-	// log.Printf("router address: %v", routerAddress.String())
 
 	address := net.IPNet{
 		IP:   ip,
@@ -117,7 +111,7 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 	}
 
 	linkPrimary, err := link.AttachNetkit(link.NetkitOptions{
-		Program:   s.containerObjs.NetkitPrimary,
+		Program:   s.bpfObjs.NetkitPrimary,
 		Attach:    ebpf.AttachNetkitPrimary,
 		Interface: netkit.Index,
 		Anchor:    link.Tail(),
@@ -127,7 +121,7 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 	}
 
 	linkPeer, err := link.AttachNetkit(link.NetkitOptions{
-		Program:   s.containerObjs.NetkitPeer,
+		Program:   s.bpfObjs.NetkitPeer,
 		Attach:    ebpf.AttachNetkitPeer,
 		Interface: netkit.Index,
 		Anchor:    link.Tail(),
@@ -143,33 +137,36 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 		netkitIndex:   netkit.Index,
 	})
 
-	if err := s.externalObjs.ExternalMaps.IpToContainer.Update(binary.LittleEndian.Uint32(ip.To4()), uint32(netkit.Index), ebpf.UpdateAny); err != nil {
-		return fmt.Errorf("set ip map %s -> %d", ip.String(), netkit.Index)
-	}
+	virtualMac := generateMac()
+	log.Printf("virtual mac: %s", virtualMac.String())
 
-	if err := s.containerObjs.ContainerMaps.IpToContainer.Update(binary.LittleEndian.Uint32(ip.To4()), uint32(netkit.Index), ebpf.UpdateAny); err != nil {
-		return fmt.Errorf("set ip map %s -> %d", ip.String(), netkit.Index)
-	}
-
-	if err := s.tapObjects.ContainerIfindex.Set(uint32(netkit.Index)); err != nil {
-		return fmt.Errorf("set tap container ifindex %d", netkit.Index)
-	}
-
-	var (
-		sb  strings.Builder
-		key uint32
-		val uint32
+	s.bpfObjs.IpInfo.Update(
+		binary.LittleEndian.Uint32(ip.To4()),
+		objs.BpfIpInfo{
+			Kind:    0,
+			Mac:     [6]byte(virtualMac),
+			Ifindex: uint32(netkit.Index),
+		},
+		ebpf.UpdateAny,
 	)
-	iter := s.externalObjs.ExternalMaps.IpToContainer.Iterate()
-	for iter.Next(&key, &val) {
-		sourceIP := key
-		packetCount := val
-		sb.WriteString(fmt.Sprintf("\t%d => %d\n", sourceIP, packetCount))
-	}
-	log.Printf("%s", sb.String())
 
 	// return cniTypes.PrintResult(res, conf.CNIVersion)
 	return nil
+}
+
+func generateMac() net.HardwareAddr {
+	buf := make([]byte, 6)
+	var mac net.HardwareAddr
+
+	_, err := rand.Read(buf)
+	if err != nil {
+	}
+
+	buf[0] |= 2
+
+	mac = append(mac, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5])
+
+	return mac
 }
 
 func setupNetkit(id string, mtu, groIPv4MaxSize, gsoIPv4MaxSize int) (*netlink.Netkit, netlink.Link, string, error) {

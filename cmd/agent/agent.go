@@ -48,10 +48,7 @@ type server struct {
 
 	ips []net.IP
 
-	containerObjs   objs.ContainerObjects
-	externalObjs    objs.ExternalObjects
-	sockObjs        objs.SocketsObjects
-	tapObjects      objs.TapObjects
+	bpfObjs         objs.BpfObjects
 	externalIngress link.Link
 	externalEgress  link.Link
 	sockOpts        link.Link
@@ -149,21 +146,19 @@ func newServer() (*server, error) {
 		},
 	}
 
-	if err := objs.LoadContainerObjects(&s.containerObjs, nil); err != nil {
-		return nil, fmt.Errorf("loading container eBPF objects: %w", err)
+	if err := objs.LoadBpfObjects(&s.bpfObjs, nil); err != nil {
+		return nil, fmt.Errorf("loading eBPF objects: %w", err)
 	}
 
-	s.containerObjs.ContainerMaps.QnameMap.Update(append([]byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-12)...), []byte{2, 2, 2, 2}, ebpf.UpdateAny)
-	s.containerObjs.ContainerMaps.QnameMap.Update(append([]byte{6, 'g', 'o', 'o', 'g', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-11)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
-	s.containerObjs.ContainerMaps.QnameMap.Update(append([]byte{6, 't', 'h', 'a', 'n', 'o', 's', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-19)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
+	s.bpfObjs.BpfMaps.QnameMap.Update(append([]byte{7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-12)...), []byte{2, 2, 2, 2}, ebpf.UpdateAny)
+	s.bpfObjs.BpfMaps.QnameMap.Update(append([]byte{6, 'g', 'o', 'o', 'g', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-11)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
+	s.bpfObjs.BpfMaps.QnameMap.Update(append([]byte{6, 't', 'h', 'a', 'n', 'o', 's', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm'}, make([]byte, 256-19)...), []byte{3, 3, 3, 3}, ebpf.UpdateAny)
 
-	if err := objs.LoadExternalObjects(&s.externalObjs, nil); err != nil {
-		return nil, fmt.Errorf("loading external eBPF objects: %w", err)
-	}
+	s.bpfObjs.DefaultMac.Set([6]byte{0xa2, 0x14, 0x11, 0xe6, 0x0b, 0x95})
 
 	linkExternalIngress, err := link.AttachTCX(link.TCXOptions{
 		Interface: 2,
-		Program:   s.externalObjs.TcxIngress,
+		Program:   s.bpfObjs.ExternalTcxIngress,
 		Attach:    ebpf.AttachTCXIngress,
 	})
 	if err != nil {
@@ -173,7 +168,7 @@ func newServer() (*server, error) {
 
 	linkExternalEgress, err := link.AttachTCX(link.TCXOptions{
 		Interface: 2,
-		Program:   s.externalObjs.TcxEgress,
+		Program:   s.bpfObjs.ExternalTcxEgress,
 		Attach:    ebpf.AttachTCXEgress,
 	})
 	if err != nil {
@@ -181,13 +176,9 @@ func newServer() (*server, error) {
 	}
 	s.externalEgress = linkExternalEgress
 
-	if err := objs.LoadSocketsObjects(&s.sockObjs, nil); err != nil {
-		return nil, fmt.Errorf("loading external eBPF objects: %w", err)
-	}
-
 	linkSockOpts, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    "/sys/fs/cgroup/dimarchos",
-		Program: s.sockObjs.SockopsLogger,
+		Program: s.bpfObjs.SockopsLogger,
 		Attach:  ebpf.AttachCGroupSockOps,
 	})
 	if err != nil {
@@ -197,8 +188,8 @@ func newServer() (*server, error) {
 
 	skMsgLink, err := link.AttachRawLink(link.RawLinkOptions{
 		Attach:  ebpf.AttachSkMsgVerdict,
-		Target:  s.sockObjs.Sockhash.FD(),
-		Program: s.sockObjs.ProgMsgVerdict,
+		Target:  s.bpfObjs.Sockhash.FD(),
+		Program: s.bpfObjs.ProgMsgVerdict,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("attach sk_msg: %v", err)
@@ -209,11 +200,9 @@ func newServer() (*server, error) {
 }
 
 func (s *server) Close() error {
-	defer s.containerObjs.Close()
-	defer s.externalObjs.Close()
+	defer s.bpfObjs.Close()
 	defer s.externalIngress.Close()
 	defer s.externalEgress.Close()
-	defer s.sockObjs.Close()
 	defer s.sockOpts.Close()
 	defer s.sockMsg.Close()
 	for _, container := range s.containers {
@@ -354,19 +343,13 @@ func main() {
 	defer server.Close()
 	pb.RegisterAgentServer(s, server)
 
-	if err := objs.LoadTapObjects(&server.tapObjects, nil); err != nil {
-		log.Fatalf("failed to load tap objects: %v", err)
-	}
-
-	server.tapObjects.DefaultMac.Set([6]byte{0xa2, 0x14, 0x11, 0xe6, 0x0b, 0x95})
-
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
 
-	server.createVM(&server.tapObjects, virConn, "example0", "vmtap0", "52:54:00:4b:95:7a", "52:54:00:4b:95:7b", "/var/lib/libvirt/images/ubuntu24.04.qcow2")
-	server.createVM(&server.tapObjects, virConn, "example1", "vmtap1", "52:54:00:4b:95:7e", "52:54:00:4b:95:7f", "/var/lib/libvirt/images/ubuntu24.04-2.qcow2")
+	server.createVM(virConn, "example0", "vmtap0", "52:54:00:4b:95:7a", "52:54:00:4b:95:7b", "/var/lib/libvirt/images/ubuntu24.04.qcow2")
+	server.createVM(virConn, "example1", "vmtap1", "52:54:00:4b:95:7e", "52:54:00:4b:95:7f", "/var/lib/libvirt/images/ubuntu24.04-2.qcow2")
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)

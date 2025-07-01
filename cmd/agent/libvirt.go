@@ -18,7 +18,7 @@ import (
 	"libvirt.org/go/libvirtxml"
 )
 
-func (s *server) createVM(tapObjects *objs.TapObjects, virConn *libvirt.Libvirt, name, ifName, hostMac, guestMac, disk string) {
+func (s *server) createVM(virConn *libvirt.Libvirt, name, ifName, hostMac, guestMac, disk string) {
 	mac, err := net.ParseMAC(hostMac)
 	if err != nil {
 		log.Fatalf("failed to parse host mac")
@@ -50,11 +50,6 @@ func (s *server) createVM(tapObjects *objs.TapObjects, virConn *libvirt.Libvirt,
 
 	log.Printf("%s index: %d, fds: %d", ifName, tuntap.Index, len(tuntap.Fds))
 
-	err = s.containerObjs.VmIfindex.Set(uint32(tuntap.Index))
-	if err != nil {
-		log.Fatalf("failed to set vm ifindex in ebpf to %d", tuntap.Index)
-	}
-
 	for _, fd := range tuntap.Fds {
 		var vnetLen int = 12
 		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd.Fd(), syscall.TUNSETVNETHDRSZ, uintptr(unsafe.Pointer(&vnetLen)))
@@ -71,7 +66,7 @@ func (s *server) createVM(tapObjects *objs.TapObjects, virConn *libvirt.Libvirt,
 
 	tcxIngressLink, err := link.AttachTCX(link.TCXOptions{
 		Interface: tuntap.Index,
-		Program:   tapObjects.TcxIngress,
+		Program:   s.bpfObjs.TapTcxIngress,
 		Attach:    ebpf.AttachTCXIngress,
 	})
 	if err != nil {
@@ -80,7 +75,7 @@ func (s *server) createVM(tapObjects *objs.TapObjects, virConn *libvirt.Libvirt,
 
 	tcxEgressLink, err := link.AttachTCX(link.TCXOptions{
 		Interface: tuntap.Index,
-		Program:   tapObjects.TcxEgress,
+		Program:   s.bpfObjs.TapTcxEgress,
 		Attach:    ebpf.AttachTCXEgress,
 	})
 	if err != nil {
@@ -90,7 +85,7 @@ func (s *server) createVM(tapObjects *objs.TapObjects, virConn *libvirt.Libvirt,
 	log.Printf("attaching xdp program to tuntap index %d", tuntap.Index)
 	xdpLink, err := link.AttachXDP(link.XDPOptions{
 		Interface: tuntap.Index,
-		Program:   tapObjects.XdpProg,
+		Program:   s.bpfObjs.XdpProg,
 	})
 	if err != nil {
 		log.Fatalf("failed to attach tap xdp: %v", err)
@@ -111,9 +106,13 @@ func (s *server) createVM(tapObjects *objs.TapObjects, virConn *libvirt.Libvirt,
 	if err != nil {
 		log.Fatalf("failed to get next ip: %v", err)
 	}
-	tapObjects.RoutingTable.Update(
+	s.bpfObjs.IpInfo.Update(
 		binary.LittleEndian.Uint32(ip.To4()),
-		objs.TapRoutingValue{Mac: [6]byte(guestMacHwAddr), Ifindex: uint32(tuntap.Index)},
+		objs.BpfIpInfo{
+			Kind:    1,
+			Mac:     [6]byte(guestMacHwAddr),
+			Ifindex: uint32(tuntap.Index),
+		},
 		ebpf.UpdateAny,
 	)
 	log.Printf("Assigned %v %v %v %v", ifName, ip.String(), guestMac, tuntap.Index)
