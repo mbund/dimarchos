@@ -20,6 +20,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const (
+	// default size is 65536
+
+	bigTCPGROMaxSize = 196608
+	bigTCPGSOMaxSize = bigTCPGROMaxSize
+)
+
 func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err error) {
 	ns, err := netns.OpenPinned(netnsPath)
 	if err != nil {
@@ -28,7 +35,7 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 	defer ns.Close()
 
 	cniID := containerId + ":" + ifName
-	netkit, peer, tmpIfName, err := setupNetkit(cniID, 1500, 65536, 65536)
+	netkit, peer, tmpIfName, err := setupNetkit(cniID, 1500, bigTCPGROMaxSize, bigTCPGSOMaxSize)
 	if err != nil {
 		return fmt.Errorf("unable to set up netkit on host side: %w", err)
 	}
