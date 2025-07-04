@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	pb "github.com/mbund/dimarchos/pkg/agent"
@@ -23,9 +25,25 @@ var (
 
 func main() {
 	flag.Parse()
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.SourceKey {
+				source, _ := a.Value.Any().(*slog.Source)
+				if source != nil {
+					source.File = filepath.Base(source.File)
+				}
+			}
+			return a
+		},
+	}))
+	slog.SetDefault(logger)
+
 	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("did not connect: %v", err)
+		slog.Error("did not connect", "err", err)
+		return
 	}
 	defer conn.Close()
 	c := pb.NewAgentClient(conn)
@@ -36,14 +54,16 @@ func main() {
 	if *delete {
 		r, err := c.DeleteContainer(ctx, &pb.DeleteContainerRequest{Name: *name})
 		if err != nil {
-			log.Fatalf("could not delete container: %v", err)
+			slog.Error("could not delete container", "err", err)
+			return
 		}
-		log.Printf("Delete container with id: %s", r.GetId())
+		slog.Info("Delete container", "id", r.GetId())
 	} else {
 		r, err := c.CreateContainer(ctx, &pb.CreateContainerRequest{Name: *name})
 		if err != nil {
-			log.Fatalf("could not create container: %v", err)
+			slog.Error("could not create container", "err", err)
+			return
 		}
-		log.Printf("Created container with id: %s", r.GetId())
+		slog.Info("Created container with", "id", r.GetId())
 	}
 }

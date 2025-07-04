@@ -3,6 +3,7 @@ module github.com/mbund/dimarchos
 go 1.24.2
 
 require (
+	github.com/google/uuid v1.6.0
 	github.com/opencontainers/runtime-spec v1.2.1
 	github.com/vishvananda/netlink v1.3.1-0.20250303224720-0e7078ed04c8
 	google.golang.org/protobuf v1.36.6
@@ -47,7 +48,6 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gopacket/gopacket v1.3.1 // indirect
 	github.com/hashicorp/hcl v1.0.1-vault-5 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

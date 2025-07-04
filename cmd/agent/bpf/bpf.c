@@ -345,13 +345,9 @@ int external_tcx_ingress(struct __sk_buff *skb) {
             .proto    = ip->protocol,
         };
 
-        bpf_printk("tcx/ingress: trying nat %pI4:%d -> %pI4:%d %s", &key.src_ip, __builtin_bswap16(key.src_port), &key.dst_ip, __builtin_bswap16(key.dst_port), ip->protocol == IPPROTO_TCP ? "tcp" : "udp");
-
         struct nat_value *entry = bpf_map_lookup_elem(&nat_table, &key);
         if (!entry)
             return TCX_PASS;
-
-        bpf_printk("tcx/ingress: tcp %pI4 -> %pI4, ifindex %d, ingress_ifindex %d", &ip->saddr, &ip->daddr, skb->ifindex, skb->ingress_ifindex);
 
         bpf_printk("tcx/ingress: nat found %pI4:%d -> %pI4:%d %s, new src %pI4:%d", &key.src_ip, __builtin_bswap16(key.src_port), &key.dst_ip, __builtin_bswap16(key.dst_port), ip->protocol == IPPROTO_TCP ? "tcp" : "udp", &entry->new_src_ip, __builtin_bswap16(entry->new_src_port));
 
@@ -589,11 +585,8 @@ int tap_tcx_ingress(struct __sk_buff *skb) {
         if ((void *)(ip + 1) > data_end)
             return TCX_PASS;
 
-        // bpf_printk("tcx/ingress tap: ip: %pI4 -> %pI4, ifindex %d, ingress_ifindex %d", &ip->saddr, &ip->daddr, skb->ifindex, skb->ingress_ifindex);
-
         if ((bpf_ntohl(ip->daddr) & 0xFFFFFF00) != 0x0A000200) {
             bpf_printk("tcx/ingress tap: ip: external %pI4 -> %pI4", &ip->saddr, &ip->daddr);
-            // return bpf_redirect(2, 0);
             return bpf_redirect_neigh(2, NULL, 0, 0);
         }
 

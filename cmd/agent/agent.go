@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -206,7 +206,7 @@ func (s *server) Close() error {
 	defer s.sockOpts.Close()
 	defer s.sockMsg.Close()
 	for _, container := range s.containers {
-		log.Printf("deleting container %s", container.id)
+		slog.Info("deleting container", "id", container.id)
 		container.netkitPeer.Close()
 		container.netkitPrimary.Close()
 	}
@@ -214,20 +214,20 @@ func (s *server) Close() error {
 }
 
 func (s *server) CreateContainer(ctx context.Context, in *pb.CreateContainerRequest) (*pb.CreateContainerResponse, error) {
-	log.Printf("Received create: %v", in.GetName())
+	slog.Info("create container", "name", in.GetName())
 
 	p, ok := peer.FromContext(ctx)
 	if !ok {
 		return nil, status.Error(codes.Internal, "unable to get peer from context")
 	}
 
-	log.Printf("peer: %s", p.Addr.String())
+	slog.Info("peer", "addr", p.Addr.String())
 
 	image, err := s.client.Pull(s.namespace, "docker.io/library/alpine:latest", containerd.WithPullUnpack)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Successfully pulled %s image\n", image.Name())
+	slog.Info("pulled", "image", image.Name())
 
 	resolvConfContent := `# Dimarchos DNS Configuration
 nameserver 1.1.1.1
@@ -245,16 +245,16 @@ nameserver 1.1.1.1
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Successfully created container with ID %s and snapshot with ID %s-snapshot", container.ID(), in.GetName())
+	slog.Info("created container", "id", container.ID(), "snapshot", in.GetName()+"-snapshot")
 
 	task, err := container.NewTask(s.namespace, cio.NewCreator(cio.WithStdio))
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("pid: %d", task.Pid())
+	slog.Info("task", "pid", task.Pid())
 	netnsPath := fmt.Sprintf("/proc/%d/ns/net", task.Pid())
-	log.Printf("netns path: %s", netnsPath)
+	slog.Info("task", "netns_path", netnsPath)
 
 	ip, err := s.nextIp()
 	if err != nil {
@@ -274,7 +274,7 @@ nameserver 1.1.1.1
 }
 
 func (s *server) DeleteContainer(_ context.Context, in *pb.DeleteContainerRequest) (*pb.DeleteContainerResponse, error) {
-	log.Printf("Received delete: %v", in.GetName())
+	slog.Info("delete container", "name", in.GetName())
 
 	container, err := s.client.LoadContainer(s.namespace, in.GetName())
 	if err != nil {
@@ -303,7 +303,7 @@ func (s *server) DeleteContainer(_ context.Context, in *pb.DeleteContainerReques
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("%s exited with status: %d\n", container.ID(), code)
+		slog.Info("exited", "container_id", container.ID(), "code", code)
 	case <-time.After(10 * time.Second):
 		if err := task.Kill(s.namespace, syscall.SIGKILL); err != nil {
 			return nil, err
@@ -313,7 +313,7 @@ func (s *server) DeleteContainer(_ context.Context, in *pb.DeleteContainerReques
 		if err != nil {
 			return nil, err
 		}
-		log.Printf("%s exited with status: %d\n", container.ID(), code)
+		slog.Info("exited", "container_id", container.ID(), "code", code)
 	}
 
 	return &pb.DeleteContainerResponse{Id: in.GetName()}, nil
@@ -322,57 +322,83 @@ func (s *server) DeleteContainer(_ context.Context, in *pb.DeleteContainerReques
 func main() {
 	flag.Parse()
 
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.SourceKey {
+				source, _ := a.Value.Any().(*slog.Source)
+				if source != nil {
+					source.File = filepath.Base(source.File)
+				}
+			}
+			return a
+		},
+	}))
+	slog.SetDefault(logger)
+
 	uri, _ := url.Parse(string(libvirt.QEMUSystem))
 	virConn, err := libvirt.ConnectToURI(uri)
 	if err != nil {
-		log.Fatalf("failed to connect: %v", err)
+		slog.Error("failed to connect", "err", err)
+		return
 	}
-
-	caps, err := getHostCapabilities(virConn)
-	if err != nil {
-		log.Fatalf("failed to get host caps")
-	}
-	fmt.Printf("cores: %d\n", caps.Host.CPU.Topology.Cores)
 
 	s := grpc.NewServer()
 	reflection.Register(s)
 	server, err := newServer()
 	if err != nil {
-		log.Fatalf("failed to build server: %v", err)
+		slog.Error("failed to build server", "err", err)
+		return
 	}
 	defer server.Close()
 	pb.RegisterAgentServer(s, server)
 
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		slog.Error("failed to listen", "err", err)
+		return
 	}
 
-	server.createVM(virConn, "example0", "vmtap0", "52:54:00:4b:95:7a", "52:54:00:4b:95:7b", "/var/lib/libvirt/images/ubuntu24.04.qcow2")
-	server.createVM(virConn, "example1", "vmtap1", "52:54:00:4b:95:7e", "52:54:00:4b:95:7f", "/var/lib/libvirt/images/ubuntu24.04-2.qcow2")
+	err = server.createVM(virConn, "example0", "vmtap0", "52:54:00:4b:95:7a", "52:54:00:4b:95:7b", "/var/lib/libvirt/images/ubuntu24.04.qcow2")
+	if err != nil {
+		slog.Error("failed to create vm", "err", err)
+	}
+
+	err = server.createVM(virConn, "example1", "vmtap1", "52:54:00:4b:95:7e", "52:54:00:4b:95:7f", "/var/lib/libvirt/images/ubuntu24.04-2.qcow2")
+	if err != nil {
+		slog.Error("failed to create vm", "err", err)
+	}
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
-		log.Println("cleaning up...")
+		slog.Info("cleaning up...")
 
 		if link, _ := netlink.LinkByName("dimmeta0"); link != nil {
 			if err := netlink.LinkDel(link); err != nil {
-				log.Println("failed to delete link dimmeta0: %w", err)
+				slog.Error("failed to delete link dimmeta0", "err", err)
 			}
 		}
 
 		if err := server.Close(); err != nil {
-			log.Println("failed to close server: %w", err)
+			slog.Error("failed to close server", "err", err)
 		}
 
-		os.Exit(0)
+		slog.Info("Initiating graceful shutdown...")
+		timer := time.AfterFunc(10*time.Second, func() {
+			slog.Error("Server couldn't stop gracefully in time. Doing force stop.")
+			s.Stop()
+		})
+		defer timer.Stop()
+
+		s.GracefulStop()
+		slog.Info("Server stopped gracefully")
 	}()
 
-	log.Printf("server listening at %v", lis.Addr())
+	slog.Info("server listening", "addr", lis.Addr())
 	if err := s.Serve(lis); err != nil {
-		log.Fatalf("failed to serve: %v", err)
+		slog.Error("failed to serve", "err", err)
 	}
 }
 

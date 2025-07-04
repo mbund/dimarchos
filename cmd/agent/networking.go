@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 
@@ -27,7 +27,7 @@ const (
 	bigTCPGSOMaxSize = bigTCPGROMaxSize
 )
 
-func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err error) {
+func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) error {
 	ns, err := netns.OpenPinned(netnsPath)
 	if err != nil {
 		return fmt.Errorf("opening netns pinned at %s: %w", netnsPath, err)
@@ -145,7 +145,7 @@ func (s *server) Add(netnsPath, containerId, ifName string, ip net.IP) (err erro
 	})
 
 	virtualMac := generateMac()
-	log.Printf("virtual mac: %s", virtualMac.String())
+	slog.Info("generated virtual mac", "address", virtualMac.String())
 
 	s.bpfObjs.IpInfo.Update(
 		binary.LittleEndian.Uint32(ip.To4()),

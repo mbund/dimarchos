@@ -2,8 +2,8 @@ package main
 
 import (
 	"encoding/binary"
-	"encoding/xml"
-	"log"
+	"fmt"
+	"log/slog"
 	"net"
 	"syscall"
 	"unsafe"
@@ -18,10 +18,10 @@ import (
 	"libvirt.org/go/libvirtxml"
 )
 
-func (s *server) createVM(virConn *libvirt.Libvirt, name, ifName, hostMac, guestMac, disk string) {
+func (s *server) createVM(virConn *libvirt.Libvirt, name, ifName, hostMac, guestMac, disk string) error {
 	mac, err := net.ParseMAC(hostMac)
 	if err != nil {
-		log.Fatalf("failed to parse host mac")
+		return fmt.Errorf("failed to parse host mac: %w", err)
 	}
 
 	tuntap := &netlink.Tuntap{
@@ -35,32 +35,32 @@ func (s *server) createVM(virConn *libvirt.Libvirt, name, ifName, hostMac, guest
 
 	err = netlink.LinkAdd(tuntap)
 	if err != nil {
-		log.Fatalf("failed to add %s", ifName)
+		return fmt.Errorf("failed to add %s: %w", ifName, err)
 	}
 
 	err = netlink.LinkSetHardwareAddr(tuntap, mac)
 	if err != nil {
-		log.Fatalf("failed to set %s mac address", ifName)
+		return fmt.Errorf("failed to set %s mac address to %s: %w", ifName, mac.String(), err)
 	}
 
 	err = netlink.LinkSetUp(tuntap)
 	if err != nil {
-		log.Fatalf("failed to set %s up", ifName)
+		return fmt.Errorf("failed to set %s up: %w", ifName, err)
 	}
 
-	log.Printf("%s index: %d, fds: %d", ifName, tuntap.Index, len(tuntap.Fds))
+	slog.Info("set up interface", "ifName", ifName, "index", tuntap.Index)
 
 	for _, fd := range tuntap.Fds {
 		var vnetLen int = 12
 		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd.Fd(), syscall.TUNSETVNETHDRSZ, uintptr(unsafe.Pointer(&vnetLen)))
 		if errno != 0 {
-			log.Fatalf("failed to set vnet header size: %v", err)
+			return fmt.Errorf("failed to set vnet header size: %w", errno)
 		}
 
 		var offloadFlags uint = unix.TUN_F_CSUM | unix.TUN_F_TSO4 | unix.TUN_F_TSO6
 		_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, fd.Fd(), syscall.TUNSETOFFLOAD, uintptr(offloadFlags))
 		if errno != 0 {
-			log.Fatalf("failed to set offload flags: %v, errno: %v", err, errno)
+			return fmt.Errorf("failed to set offload flags: %w", errno)
 		}
 	}
 
@@ -70,7 +70,7 @@ func (s *server) createVM(virConn *libvirt.Libvirt, name, ifName, hostMac, guest
 		Attach:    ebpf.AttachTCXIngress,
 	})
 	if err != nil {
-		log.Fatalf("failed to attach tap tcx ingress: %v", err)
+		return fmt.Errorf("failed to attach tap tcx ingress: %w", err)
 	}
 
 	tcxEgressLink, err := link.AttachTCX(link.TCXOptions{
@@ -79,16 +79,16 @@ func (s *server) createVM(virConn *libvirt.Libvirt, name, ifName, hostMac, guest
 		Attach:    ebpf.AttachTCXEgress,
 	})
 	if err != nil {
-		log.Fatalf("failed to attach tap tcx egress: %v", err)
+		return fmt.Errorf("failed to attach tap tcx egress: %w", err)
 	}
 
-	log.Printf("attaching xdp program to tuntap index %d", tuntap.Index)
+	slog.Info("attaching xdp program to tuntap", "index", tuntap.Index)
 	xdpLink, err := link.AttachXDP(link.XDPOptions{
 		Interface: tuntap.Index,
 		Program:   s.bpfObjs.XdpProg,
 	})
 	if err != nil {
-		log.Fatalf("failed to attach tap xdp: %v", err)
+		return fmt.Errorf("failed to attach tap xdp: %w", err)
 	}
 
 	s.vms = append(s.vms, vm{
@@ -99,12 +99,12 @@ func (s *server) createVM(virConn *libvirt.Libvirt, name, ifName, hostMac, guest
 
 	guestMacHwAddr, err := net.ParseMAC(guestMac)
 	if err != nil {
-		log.Fatalf("failed to parse host mac")
+		return fmt.Errorf("failed to parse host mac: %w", err)
 	}
 
 	ip, err := s.nextIp()
 	if err != nil {
-		log.Fatalf("failed to get next ip: %v", err)
+		return fmt.Errorf("failed to get next ip: %w", err)
 	}
 	s.bpfObjs.IpInfo.Update(
 		binary.LittleEndian.Uint32(ip.To4()),
@@ -115,7 +115,7 @@ func (s *server) createVM(virConn *libvirt.Libvirt, name, ifName, hostMac, guest
 		},
 		ebpf.UpdateAny,
 	)
-	log.Printf("Assigned %v %v %v %v", ifName, ip.String(), guestMac, tuntap.Index)
+	slog.Info("assigned", "ifName", ifName, "ip", ip.String(), "guestMac", guestMac, "index", tuntap.Index)
 
 	domainUuid := uuid.New()
 
@@ -367,31 +367,18 @@ func (s *server) createVM(virConn *libvirt.Libvirt, name, ifName, hostMac, guest
 
 	domainXML, err := domainSpec.Marshal()
 	if err != nil {
-		log.Fatalf("failed to marshal domain spec")
+		return fmt.Errorf("failed to marshal domain spec: %w", err)
 	}
 
 	domain, err := virConn.DomainDefineXML(domainXML)
 	if err != nil {
-		log.Fatalf("failed to define domain xml: %v", err)
+		return fmt.Errorf("failed to define domain xml: %v", err)
 	}
 
 	err = virConn.DomainCreate(domain)
 	if err != nil {
-		log.Fatalf("failed to create domain: %v", err)
-	}
-}
-
-func getHostCapabilities(virConn *libvirt.Libvirt) (libvirtxml.Caps, error) {
-	caps := libvirtxml.Caps{}
-	capsXML, err := virConn.Capabilities()
-	if err != nil {
-		return caps, err
+		return fmt.Errorf("failed to create domain: %v", err)
 	}
 
-	err = xml.Unmarshal([]byte(capsXML), &caps)
-	if err != nil {
-		return caps, err
-	}
-
-	return caps, nil
+	return nil
 }
